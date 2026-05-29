@@ -18,3 +18,4 @@ htmlcov/
 *.db-wal
 *.db-shm
 .eval-harness/
+/push.sh
