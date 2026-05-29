@@ -40,8 +40,9 @@ dev = [
 eval-harness = "src.cli:app"
 
 [project.urls]
-Homepage = "https://example.com/eval-harness"
-Repository = "https://example.com/eval-harness"
+Homepage = "https://github.com/onicarps/eval-harness"
+Repository = "https://github.com/onicarps/eval-harness"
+Issues = "https://github.com/onicarps/eval-harness/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
