@@ -10,7 +10,10 @@ import time
 from pathlib import Path
 
 import typer
+from dotenv import load_dotenv
 from rich.console import Console
+
+load_dotenv(Path.home() / ".hermes" / "profiles" / "eval-harness" / ".env")
 
 from src.db import Database
 from src.evaluator import EvaluatorConfig, LLMEvaluator

@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 keywords = [ "llm", "evaluation", "rubric", "cli", "faithfulness",]
 classifiers = [ "Development Status :: 4 - Beta", "License :: OSI Approved :: MIT License", "Programming Language :: Python :: 3", "Programming Language :: Python :: 3.11", "Programming Language :: Python :: 3.12", "Topic :: Software Development :: Quality Assurance",]
-dependencies = [ "typer>=0.12", "pydantic>=2.0", "rich>=13.0", "httpx>=0.27", "tiktoken>=0.7",]
+dependencies = [ "typer>=0.12", "pydantic>=2.0", "rich>=13.0", "httpx>=0.27", "tiktoken>=0.7", "python-dotenv>=1.0",]
 [[project.authors]]
 name = "Eval Harness Contributors"
 
