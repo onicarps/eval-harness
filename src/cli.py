@@ -35,8 +35,8 @@ app = typer.Typer(
 
 
 def _get_api_key() -> str:
-    """Return the OPENRIXER_API_KEY env value or empty string."""
-    return os.environ.get("OPENRIXER_API_KEY", "")
+    """Return the OPENROUTER_API_KEY env value or empty string."""
+    return os.environ.get("OPENROUTER_API_KEY", "")
 
 
 def _judge_list(
@@ -110,7 +110,7 @@ def run_cmd(
 
     api_key = _get_api_key()
     if not api_key:
-        console.print("[red]OPENRIXER_API_KEY is not set. Aborting.[/red]")
+        console.print("[red]OPENROUTER_API_KEY is not set. Aborting.[/red]")
         raise typer.Exit(code=2)
 
     if not yes and not quiet:

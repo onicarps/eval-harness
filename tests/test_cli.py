@@ -71,7 +71,7 @@ def test_dry_run_does_not_call_api(tmp_path: Path) -> None:
 def test_run_end_to_end(
     tmp_path: Path, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("OPENRIXER_API_KEY", "test")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test")
     p = tmp_path / "input.jsonl"
     p.write_text('{"input":"hi","output":"hello"}\n')
     db_path = tmp_path / "eval.db"
@@ -119,7 +119,7 @@ def test_run_end_to_end(
 
 
 def test_run_fails_without_api_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("OPENRIXER_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     p = tmp_path / "input.jsonl"
     p.write_text('{"input":"hi","output":"hello"}\n')
     db_path = tmp_path / "eval.db"
@@ -169,7 +169,7 @@ def test_cache_clear(tmp_path: Path) -> None:
 
 
 def test_run_confirmation_abort(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OPENRIXER_API_KEY", "test")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test")
     p = tmp_path / "input.jsonl"
     p.write_text('{"input":"hi","output":"hello"}\n')
     db_path = tmp_path / "eval.db"
@@ -207,7 +207,7 @@ def test_run_file_not_found(tmp_path: Path) -> None:
 def test_report_csv_output(
     tmp_path: Path, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("OPENRIXER_API_KEY", "test")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test")
     p = tmp_path / "input.jsonl"
     p.write_text('{"input":"hi","output":"hello"}\n')
     db_path = tmp_path / "eval.db"
