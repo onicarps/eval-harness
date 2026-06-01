@@ -114,7 +114,12 @@ def run_cmd(
         raise typer.Exit(code=2)
 
     if not yes and not quiet:
-        console.print(f"Will evaluate {len(records)} record(s). Continue? [y/N]")
+        if not typer.confirm(
+            f"Will evaluate {len(records)} record(s). Continue?",
+            default=False,
+        ):
+            console.print("[yellow]aborted by user[/yellow]")
+            raise typer.Exit(code=2)
 
     registry = JudgeRegistry(cache_path=judges_cache) if judges_cache else JudgeRegistry()
     judges = _judge_list(judge, registry, no_fallback, max_fallbacks)

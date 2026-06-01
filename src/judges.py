@@ -57,11 +57,19 @@ class JudgeRegistry:
         self.cache_path = Path(cache_path) if cache_path else DEFAULT_CACHE_PATH
 
     def list(self) -> list[JudgeModel]:
-        """Return the cached judge list, or built-in defaults if no cache exists."""
-        if self.cache_path.exists():
+        """Return the cached judge list, or built-in defaults if no cache exists.
+
+        Falls back to built-in defaults when the cache file is missing,
+        corrupted, or contains no usable entries.
+        """
+        if not self.cache_path.exists():
+            return list(DEFAULT_JUDGE_MODELS)
+        try:
             data = json.loads(self.cache_path.read_text())
-            return [JudgeModel(**m) for m in data.get("models", [])]
-        return list(DEFAULT_JUDGE_MODELS)
+            models = [JudgeModel(**m) for m in data.get("models", [])]
+        except (json.JSONDecodeError, OSError, TypeError, ValueError):
+            return list(DEFAULT_JUDGE_MODELS)
+        return models or list(DEFAULT_JUDGE_MODELS)
 
     def fetch(self, refresh: bool = False, api_key: str | None = None) -> list[JudgeModel]:
         """Fetch and cache the latest free model list.

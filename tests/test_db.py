@@ -191,3 +191,45 @@ def test_migration_idempotent(tmp_path: Path) -> None:
     db = Database(p)
     assert db.get_schema_version() == CURRENT_SCHEMA_VERSION
     db.close()
+
+
+def test_result_record_index_exists(db: Database) -> None:
+    cur = db.connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_results_record';"
+    )
+    assert cur.fetchone() is not None
+
+
+def test_get_result_for_record(db: Database) -> None:
+    run = EvalRun(config={})
+    db.insert_run(run)
+    rec = EvalRecord(input_text="i", output_text="o", run_id=run.run_id)
+    db.insert_record(rec)
+    assert db.get_result_for_record(rec.record_id) is None
+    res = EvalResult(
+        record_id=rec.record_id,
+        run_id=run.run_id,
+        faithfulness=0.9,
+        task_completion=0.7,
+        combined_score=0.8,
+        pass_fail=PassFail.PASS,
+        judge_model="m",
+    )
+    db.insert_result(res)
+    fetched = db.get_result_for_record(rec.record_id)
+    assert fetched is not None
+    assert fetched.judge_model == "m"
+
+
+def test_export_unsupported_format(db: Database, tmp_path: Path) -> None:
+    run = EvalRun(config={})
+    db.insert_run(run)
+    out = tmp_path / "x.txt"
+    with pytest.raises(ValueError):
+        db.export_run(run.run_id, out, fmt="xml")
+
+
+def test_export_missing_run_raises(db: Database, tmp_path: Path) -> None:
+    out = tmp_path / "x.json"
+    with pytest.raises(ValueError):
+        db.export_run("missing", out, fmt="json")

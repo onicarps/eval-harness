@@ -9,7 +9,7 @@ from __future__ import annotations
 import csv
 import json
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +83,7 @@ _SCHEMA_V1 = [
     );
     """,
     "CREATE INDEX IF NOT EXISTS idx_results_run ON eval_results(run_id);",
+    "CREATE INDEX IF NOT EXISTS idx_results_record ON eval_results(record_id);",
     """
     CREATE TABLE IF NOT EXISTS judge_cache (
         cache_key TEXT PRIMARY KEY,
@@ -144,7 +145,7 @@ class Database:
         if current < CURRENT_SCHEMA_VERSION:
             cur.execute(
                 "INSERT INTO schema_version (version, applied_at) VALUES (?, ?);",
-                (CURRENT_SCHEMA_VERSION, datetime.utcnow().isoformat()),
+                (CURRENT_SCHEMA_VERSION, datetime.now(UTC).isoformat()),
             )
         self.connection.commit()
 

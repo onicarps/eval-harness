@@ -101,3 +101,29 @@ def test_to_json_lines(tmp_path: Path) -> None:
     parsed = json.loads(out)
     assert isinstance(parsed, list)
     assert all("id" in m for m in parsed)
+
+
+def test_list_falls_back_when_cache_corrupted(tmp_path: Path) -> None:
+    cache = tmp_path / "judges.json"
+    cache.write_text("{not: valid json")
+    registry = JudgeRegistry(cache_path=cache)
+    models = registry.list()
+    assert len(models) > 0
+    assert models[0].id == DEFAULT_JUDGE_MODELS[0].id
+
+
+def test_list_falls_back_when_cache_has_empty_models(tmp_path: Path) -> None:
+    cache = tmp_path / "judges.json"
+    cache.write_text(json.dumps({"models": []}))
+    registry = JudgeRegistry(cache_path=cache)
+    models = registry.list()
+    assert len(models) > 0
+
+
+def test_list_falls_back_when_cache_has_invalid_entry(tmp_path: Path) -> None:
+    cache = tmp_path / "judges.json"
+    cache.write_text(json.dumps({"models": [{"missing_required_id_field": True}]}))
+    registry = JudgeRegistry(cache_path=cache)
+    models = registry.list()
+    assert len(models) > 0
+    assert models[0].id == DEFAULT_JUDGE_MODELS[0].id

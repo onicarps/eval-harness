@@ -35,7 +35,7 @@ Exit codes: `0` all pass, `1` any failures, `2` evaluator error.
 ## CI/CD example
 
 ```yaml
-- run: pip install eval-harness
+- run: pip install llm-eval-harness
 - run: OPENRIXER_API_KEY=${{ secrets.OPENRIXER_API_KEY }} eval-harness run eval/cases.jsonl --pass-threshold 0.7
 ```
 

@@ -14,7 +14,9 @@ import hashlib
 import json
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -188,7 +190,7 @@ class LLMEvaluator:
         run: EvalRun,
         records: list[EvalRecord],
         resume: bool = False,
-        progress_cb: callable[[int, int], None] | None = None,
+        progress_cb: Callable[[int, int], None] | None = None,
     ) -> list[EvalResult]:
         """Evaluate records, returning a list of :class:`EvalResult`.
 
@@ -215,7 +217,7 @@ class LLMEvaluator:
                 done += 1
                 if progress_cb is not None:
                     progress_cb(done, len(to_eval))
-        results.sort(key=lambda r: r.evaluated_at or 0)
+        results.sort(key=lambda r: r.evaluated_at or datetime.min.replace(tzinfo=UTC))
         return results
 
     async def _evaluate_one(

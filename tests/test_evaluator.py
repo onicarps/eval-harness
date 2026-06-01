@@ -11,6 +11,7 @@ from src.db import Database
 from src.evaluator import (
     EvaluatorConfig,
     LLMEvaluator,
+    _RateLimiter,
     cache_key_for,
     estimate_tokens,
     extract_judge_json,
@@ -224,3 +225,54 @@ def test_pass_fail_threshold() -> None:
     assert score == 0.7
     assert pass_fail_from(0.7, 0.7).value == "pass"
     assert pass_fail_from(0.69, 0.7).value == "fail"
+
+
+def test_extract_judge_json_clamps_via_build_result(db: Database, openrouter_payload: dict) -> None:
+    run = EvalRun(config={}, judge_model="m")
+    rec = EvalRecord(input_text="i", output_text="o", run_id=run.run_id)
+    ev = LLMEvaluator(
+        db=db,
+        config=EvaluatorConfig(
+            api_key="t",
+            judges=["m"],
+            rubric=BUILTIN_RUBRIC_V1,
+        ),
+    )
+    result = ev._build_result(
+        record=rec,
+        run=run,
+        judge="m",
+        tried=["m"],
+        data={"faithfulness": 2.0, "task_completion": -0.5, "reasoning": "r"},
+        tokens=1,
+    )
+    assert result.faithfulness == 1.0
+    assert result.task_completion == 0.0
+
+
+def test_extract_judge_json_handles_integer_scores() -> None:
+    s = '{"faithfulness": 1, "task_completion": 0}'
+    out = extract_judge_json(s)
+    assert float(out["faithfulness"]) == 1.0
+
+
+def test_evaluator_requires_at_least_one_judge(db: Database) -> None:
+    with pytest.raises(ValueError):
+        LLMEvaluator(
+            db=db,
+            config=EvaluatorConfig(api_key="t", judges=[], rubric=BUILTIN_RUBRIC_V1),
+        )
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_unlimited_is_noop() -> None:
+    limiter = _RateLimiter(None)
+    await limiter.wait()
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_within_capacity() -> None:
+    limiter = _RateLimiter(60)
+    for _ in range(3):
+        await limiter.wait()
+    assert len(limiter._timestamps) == 3
