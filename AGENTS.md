@@ -1,7 +1,21 @@
 # AGENTS.md — Eval Harness Project
 
 ## Project
-Python CLI tool that evaluates LLM outputs from production logs against a dual-dimension rubric (faithfulness + task completion).
+Python CLI tool that evaluates LLM outputs from production logs AND agent behavior in environments.
+
+## Phase 2 Plan
+See `PLAN_PHASE2.md` for the full Phase 2 implementation plan.
+
+**Phase 2A (v0.2.0) — Production Intelligence:**
+- `eval-harness trend` — score timeline + regression detection
+- `eval-harness rubric` — domain-specific rubric templates
+- `eval-harness gate` — CI/CD quality gate
+- Multi-judge comparison mode
+
+**Phase 2B (v0.3.0) — Agent Evaluation:**
+- `eval-harness agent eval` — environment-based agent evaluation
+- Task suite format + built-in suites
+- Environment adapters (python-repl, bash-sandbox, mock)
 
 ## Tech Stack
 - Python 3.11+
@@ -99,7 +113,7 @@ Combined: 0.5 * faithfulness + 0.5 * task_completion. Pass/fail threshold: 0.7.
 Exit codes: 0=all pass, 1=any failures, 2=evaluator error
 
 ## API Key
-Read from OPENRIXER_API_KEY env var (not hardcoded).
+Read from openrouter_API_KEY env var (not hardcoded).
 
 ## Rules
 - TDD: write failing test BEFORE implementation
