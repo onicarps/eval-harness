@@ -130,6 +130,18 @@ class RubricTemplate(BaseModel):
     prompt_template: str
     description: str = ""
 
+    @field_validator("prompt_template")
+    @classmethod
+    def _validate_placeholders(cls, v: str) -> str:
+        """Ensure the template contains the required placeholders."""
+        required = ["{input}", "{output}", "{reference}"]
+        missing = [p for p in required if p not in v]
+        if missing:
+            raise ValueError(
+                f"prompt_template is missing required placeholders: {missing}"
+            )
+        return v
+
 
 BUILTIN_RUBRIC_V1 = RubricTemplate(
     rubric_id="faithfulness-v1",

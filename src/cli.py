@@ -13,6 +13,7 @@ from pathlib import Path
 import typer
 from dotenv import load_dotenv
 from rich.console import Console
+from rich.table import Table
 
 from src.db import Database
 from src.evaluator import EvaluatorConfig, LLMEvaluator
@@ -347,5 +348,42 @@ def cache_cmd(
         db.close()
 
 
-if __name__ == "__main__":  # pragma: no cover
-    app()
+@app.command("list-runs", help="List previous evaluation runs.")
+def list_runs_cmd(
+    limit: int = typer.Option(20, "--limit", help="Maximum number of runs to show."),
+    json_out: bool = typer.Option(False, "--json"),
+    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db"),
+) -> None:
+    """List previous evaluation runs."""
+    db = Database(db_path)
+    try:
+        runs = db.list_runs(limit=limit)
+        if json_out:
+            typer.echo(json.dumps([r.model_dump() for r in runs], indent=2, default=str))
+            return
+        console = Console()
+        if not runs:
+            console.print("[yellow]no runs found[/yellow]")
+            return
+        table = Table(title="Evaluation Runs")
+        table.add_column("Run ID", style="cyan", no_wrap=True)
+        table.add_column("Created", style="dim")
+        table.add_column("Records", justify="right")
+        table.add_column("Status", style="bold")
+        table.add_column("Pass Rate", justify="right")
+        table.add_column("Mean Score", justify="right")
+        table.add_column("Judge", style="dim")
+        for r in runs:
+            status_style = "green" if r.status == RunStatus.COMPLETED else "red" if r.status == RunStatus.FAILED else "yellow"
+            table.add_row(
+                r.run_id[:8],
+                r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "",
+                str(r.record_count),
+                f"[{status_style}]{r.status.value}[/{status_style}]",
+                f"{r.pass_rate:.1%}" if r.pass_rate is not None else "-",
+                f"{r.mean_score:.3f}" if r.mean_score is not None else "-",
+                r.judge_model or "-",
+            )
+        console.print(table)
+    finally:
+        db.close()

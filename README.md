@@ -26,6 +26,7 @@ Input JSONL schema:
 
 - `eval-harness run <file>` — ingest, evaluate, and report
 - `eval-harness judges` — list free judge models (cached in `~/.eval-harness/judges.json`)
+- `eval-harness list-runs [--limit N] [--json]` — list previous evaluation runs
 - `eval-harness report --run-id UUID` — show a stored run
 - `eval-harness export --run-id UUID --format json|csv --output-file PATH`
 - `eval-harness cache [--stats] [--clear]`

@@ -115,8 +115,22 @@ def test_rubric_template_builtin():
 
 
 def test_rubric_template_custom():
-    r = RubricTemplate(rubric_id="x", version="1.0", prompt_template="say hi")
+    r = RubricTemplate(
+        rubric_id="x",
+        version="1.0",
+        prompt_template="Evaluate {input} vs {output} with ref {reference}",
+    )
     assert r.rubric_id == "x"
+
+
+def test_rubric_template_missing_placeholders():
+    with pytest.raises(ValueError, match="missing required placeholders"):
+        RubricTemplate(rubric_id="x", version="1.0", prompt_template="no placeholders here")
+
+
+def test_rubric_template_partial_placeholders():
+    with pytest.raises(ValueError, match="missing required placeholders"):
+        RubricTemplate(rubric_id="x", version="1.0", prompt_template="only {input} present")
 
 
 def test_pass_fail_enum_values():

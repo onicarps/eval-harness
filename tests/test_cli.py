@@ -18,7 +18,7 @@ def test_help_lists_all_commands() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     out = result.stdout
-    for cmd in ("run", "judges", "report", "export", "cache"):
+    for cmd in ("run", "judges", "list-runs", "report", "export", "cache"):
         assert cmd in out
 
 
@@ -287,3 +287,42 @@ def test_judges_command_default_text_output(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0
     assert "x/free" in result.stdout
+
+
+def test_list_runs_empty(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["list-runs", "--db", str(tmp_path / "x.db")])
+    assert result.exit_code == 0
+    assert "no runs found" in result.stdout
+
+
+def test_list_runs_with_data(tmp_path: Path) -> None:
+    from src.db import Database
+    from src.models import EvalRun, RunStatus
+
+    db_path = tmp_path / "x.db"
+    db = Database(db_path)
+    run = EvalRun(config={"test": True}, judge_model="x/free", status=RunStatus.COMPLETED, record_count=5, mean_score=0.8, pass_rate=0.9)
+    db.insert_run(run)
+    db.close()
+
+    result = runner.invoke(app, ["list-runs", "--db", str(db_path)])
+    assert result.exit_code == 0
+    assert run.run_id[:8] in result.stdout
+    assert "completed" in result.stdout
+
+
+def test_list_runs_json(tmp_path: Path) -> None:
+    from src.db import Database
+    from src.models import EvalRun, RunStatus
+
+    db_path = tmp_path / "x.db"
+    db = Database(db_path)
+    run = EvalRun(config={"test": True}, judge_model="x/free", status=RunStatus.COMPLETED, record_count=3, mean_score=0.7, pass_rate=1.0)
+    db.insert_run(run)
+    db.close()
+
+    result = runner.invoke(app, ["list-runs", "--json", "--db", str(db_path)])
+    assert result.exit_code == 0
+    parsed = json.loads(result.stdout)
+    assert len(parsed) == 1
+    assert parsed[0]["run_id"] == run.run_id
