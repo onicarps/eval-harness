@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import time
@@ -12,8 +13,6 @@ from pathlib import Path
 import typer
 from dotenv import load_dotenv
 from rich.console import Console
-
-load_dotenv(Path.home() / ".hermes" / "profiles" / "eval-harness" / ".env")
 
 from src.db import Database
 from src.evaluator import EvaluatorConfig, LLMEvaluator
@@ -26,6 +25,18 @@ from src.reporter import (
     print_table,
     render_table,
 )
+
+# Load environment variables from .env file
+# Check for custom env path via OPENROUTER_ENV_PATH, then fallback to default
+env_path = os.environ.get("OPENROUTER_ENV_PATH")
+if env_path:
+    load_dotenv(Path(env_path))
+else:
+    # Default to .env in current directory or parent directories
+    load_dotenv()
+
+# Setup logging
+logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path.home() / ".eval-harness" / "eval.db"
 
@@ -103,18 +114,27 @@ def run_cmd(
 
     if not records:
         console.print("[yellow]no records to evaluate[/yellow]")
+        logger.warning("No records to evaluate from %s", file)
         raise typer.Exit(code=2)
 
     if dry_run:
         console.print(f"[green]dry-run: {len(records)} record(s) parsed.[/green]")
+        logger.info("Dry run: %d records parsed from %s", len(records), file)
         for r in records[:5]:
             console.print(f" - {r.input_text[:80]} -> {r.output_text[:80]}")
         raise typer.Exit(code=0)
 
+    logger.info("Starting evaluation of %d records from %s", len(records), file)
+    logger.debug("Options: format=%s, judge=%s, pass_threshold=%s",
+                 format, judge, pass_threshold)
+
     api_key = _get_api_key()
     if not api_key:
         console.print("[red]OPENROUTER_API_KEY is not set. Aborting.[/red]")
+        logger.error("OPENROUTER_API_KEY environment variable is not set")
         raise typer.Exit(code=2)
+
+    logger.debug("Using API key (first 8 chars): %s...", api_key[:8] if len(api_key) >= 8 else api_key)
 
     if not yes and not quiet:
         if not typer.confirm(
@@ -122,16 +142,22 @@ def run_cmd(
             default=False,
         ):
             console.print("[yellow]aborted by user[/yellow]")
+            logger.info("User aborted evaluation")
             raise typer.Exit(code=2)
+        logger.info("User confirmed evaluation of %d records", len(records))
 
     registry = JudgeRegistry(cache_path=judges_cache) if judges_cache else JudgeRegistry()
     judges = _judge_list(judge, registry, no_fallback, max_fallbacks)
     if not judges:
         console.print("[red]no judges available[/red]")
+        logger.error("No judges available for evaluation")
         raise typer.Exit(code=2)
+    logger.info("Selected judges: %s", judges)
 
+    logger.info("Opening database at %s", db_path)
     db = Database(db_path)
     try:
+        logger.debug("Creating EvalRun")
         run = EvalRun(
             config={
                 "file": str(file),
@@ -142,12 +168,15 @@ def run_cmd(
             judge_model=judges[0],
         )
         db.insert_run(run)
+        logger.debug("Inserted run %s", run.run_id)
         for rec in records:
             rec.run_id = run.run_id
             db.insert_record(rec)
         run.record_count = len(records)
         db.update_run(run)
+        logger.debug("Updated run %s with %d records", run.run_id, len(records))
 
+        logger.info("Initializing LLMEvaluator with %d judges", len(judges))
         evaluator = LLMEvaluator(
             db=db,
             config=EvaluatorConfig(
@@ -169,18 +198,22 @@ def run_cmd(
             def progress_cb(done: int, total: int) -> None:
                 if done == total or done % max(1, total // 20) == 0:
                     console.print(f"[dim]progress: {done}/{total}[/dim]")
+                    logger.debug("Evaluation progress: %d/%d", done, total)
 
         start = time.monotonic()
+        logger.info("Starting evaluation of %d records", len(records))
         try:
             results = asyncio.run(
                 evaluator.evaluate(run, records, resume=resume, progress_cb=progress_cb)
             )
         except Exception as exc:
             console.print(f"[red]evaluator error: {exc}[/red]")
+            logger.error("Evaluator error: %s", exc, exc_info=True)
             run.status = RunStatus.FAILED
             db.update_run(run)
             raise typer.Exit(code=2) from exc
         elapsed = time.monotonic() - start
+        logger.info("Evaluation completed in %.2f seconds", elapsed)
 
         for r in results:
             db.insert_result(r)
@@ -190,6 +223,8 @@ def run_cmd(
         run.mean_score = summary.mean_combined
         run.pass_rate = summary.pass_rate
         db.update_run(run)
+        logger.info("Updated run %s: mean_score=%.3f, pass_rate=%.3f",
+                   run.run_id, run.mean_score, run.pass_rate)
 
         if output == "json":
             payload = summary.model_dump(mode="json")
@@ -205,9 +240,14 @@ def run_cmd(
                 print_table(summary, console=console)
 
         if summary.failed == 0:
+            logger.info("Evaluation passed: %d/%d records passed",
+                       summary.passed, summary.total)
             raise typer.Exit(code=0)
+        logger.info("Evaluation failed: %d/%d records passed",
+                   summary.passed, summary.total)
         raise typer.Exit(code=1)
     finally:
+        logger.debug("Closing database connection")
         db.close()
 
 

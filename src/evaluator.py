@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import time
 from collections.abc import Callable
@@ -34,6 +35,9 @@ from src.models import (
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 PASS_THRESHOLD = 0.7
+
+# Setup logging
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -200,11 +204,14 @@ class LLMEvaluator:
             resume: When True, skip records that already have a stored result.
             progress_cb: Optional callback invoked after each record.
         """
+        logger.info("Starting evaluation of %d records (resume=%s)", len(records), resume)
         to_eval: list[EvalRecord] = []
         for r in records:
             if resume and self.db.get_result_for_record(r.record_id) is not None:
+                logger.debug("Skipping record %s (already evaluated)", r.record_id)
                 continue
             to_eval.append(r)
+        logger.info("Evaluating %d records (skipped %d cached)", len(to_eval), len(records) - len(to_eval))
 
         sem = asyncio.Semaphore(max(1, self.config.concurrency))
         results: list[EvalResult] = []
@@ -217,7 +224,9 @@ class LLMEvaluator:
                 done += 1
                 if progress_cb is not None:
                     progress_cb(done, len(to_eval))
+                    logger.debug("Progress callback: %d/%d", done, len(to_eval))
         results.sort(key=lambda r: r.evaluated_at or datetime.min.replace(tzinfo=UTC))
+        logger.info("Evaluation completed for %d records", len(results))
         return results
 
     async def _evaluate_one(
@@ -229,9 +238,11 @@ class LLMEvaluator:
         index: int,
     ) -> EvalResult:
         """Evaluate a single record using round-robin fallback."""
+        logger.debug("Starting evaluation of record %s (index %d)", record.record_id, index)
         async with sem:
             prompt = _render_prompt(self.config.rubric, record)
             tokens = estimate_tokens(prompt)
+            logger.debug("Prompt tokens estimated: %d", tokens)
             tried: list[str] = []
             last_error: str | None = None
             judges = list(self.config.judges)
@@ -239,9 +250,11 @@ class LLMEvaluator:
                 judges = judges[:1]
             else:
                 judges = judges[: max(1, self.config.max_fallbacks + 1)]
+            logger.debug("Will try judges in order: %s", judges)
 
             for judge in judges:
                 tried.append(judge)
+                logger.debug("Trying judge %s (%d/%d)", judge, len(tried), len(judges))
                 key = cache_key_for(
                     judge,
                     self.config.rubric.version,
@@ -252,6 +265,7 @@ class LLMEvaluator:
                 cached = self.db.get_cache(key) if self.config.use_cache else None
                 if cached is not None:
                     self.db.touch_cache(key)
+                    logger.debug("Using cached result for judge %s", judge)
                     return self._build_result(
                         record=record,
                         run=run,
@@ -262,9 +276,12 @@ class LLMEvaluator:
                     )
                 await self._rate.wait()
                 try:
+                    logger.debug("Calling judge %s", judge)
                     data = await self._call_judge(client, judge, prompt)
+                    logger.debug("Judge %s returned result", judge)
                 except Exception as exc:
                     last_error = f"{judge}: {exc}"
+                    logger.warning("Judge %s failed: %s", judge, exc)
                     continue
                 if self.config.use_cache:
                     self.db.put_cache(
@@ -275,6 +292,7 @@ class LLMEvaluator:
                             response=data,
                         )
                     )
+                    logger.debug("Cached result for judge %s", judge)
                 return self._build_result(
                     record=record,
                     run=run,
@@ -284,6 +302,7 @@ class LLMEvaluator:
                     tokens=tokens,
                 )
 
+            logger.error("All judges failed for record %s", record.record_id)
             return EvalResult(
                 record_id=record.record_id,
                 run_id=run.run_id,
@@ -304,6 +323,7 @@ class LLMEvaluator:
         self, client: httpx.AsyncClient, model_id: str, prompt: str
     ) -> dict[str, Any]:
         """Issue a single OpenRouter chat completion call."""
+        logger.debug("Calling OpenRouter API for model %s", model_id)
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",
             "Content-Type": "application/json",
@@ -317,12 +337,20 @@ class LLMEvaluator:
             "temperature": 0.0,
         }
         resp = await client.post(OPENROUTER_URL, headers=headers, json=payload)
+        logger.debug("OpenRouter API response status: %d", resp.status_code)
         if resp.status_code >= 400:
+            logger.error("OpenRouter API HTTP error: %d", resp.status_code)
             raise httpx.HTTPStatusError(
                 f"HTTP {resp.status_code}", request=resp.request, response=resp
             )
         body = resp.json()
+        # Check for OpenRouter application-level error format
+        if "error" in body:
+            error_msg = body["error"].get("message", "Unknown error from OpenRouter")
+            logger.error("OpenRouter API application error: %s", error_msg)
+            raise RuntimeError(f"OpenRouter API error: {error_msg}")
         content = body["choices"][0]["message"]["content"]
+        logger.debug("OpenRouter API returned content length: %d", len(content))
         return extract_judge_json(content)
 
     def _build_result(
@@ -335,10 +363,12 @@ class LLMEvaluator:
         tokens: int,
     ) -> EvalResult:
         """Construct an EvalResult from judge data, clamping invalid scores."""
+        logger.debug("Building result for record %s from judge %s", record.record_id, judge)
         faith = float(data.get("faithfulness", 0.0))
         task = float(data.get("task_completion", 0.0))
         faith = max(0.0, min(1.0, faith))
         task = max(0.0, min(1.0, task))
+        logger.debug("Scores: faithfulness=%.3f, task_completion=%.3f", faith, task)
         combined = combine_scores(faith, task)
         return EvalResult(
             record_id=record.record_id,

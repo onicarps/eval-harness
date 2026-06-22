@@ -25,7 +25,7 @@ Requirements:
 - Python 3.11+, hatchling build backend
 - Dependencies: typer>=0.12, pydantic>=2.0, rich>=13.0, httpx>=0.27, tiktoken>=0.7
 - Dev deps: pytest>=8, pytest-httpx>=0.30, pytest-cov>=5, ruff>=0.5
-- OPENRIXER_API_KEY env var (never hardcoded)
+- openrouter_API_KEY env var (never hardcoded)
 - TDD for every module: test file before source file, each public function tested
 - Type hints everywhere (mypy-compatible)
 - Google-style docstrings for all public functions

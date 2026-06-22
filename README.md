@@ -12,7 +12,7 @@ pip install -e ".[dev]"
 ## Quickstart
 
 ```bash
-export OPENRIXER_API_KEY=sk-or-...
+export OPENROUTER_API_KEY=sk-or-...
 eval-harness run path/to/logs.jsonl --judge meta-llama/llama-3.1-8b-instruct:free
 ```
 
@@ -36,7 +36,7 @@ Exit codes: `0` all pass, `1` any failures, `2` evaluator error.
 
 ```yaml
 - run: pip install llm-eval-harness
-- run: OPENRIXER_API_KEY=${{ secrets.OPENRIXER_API_KEY }} eval-harness run eval/cases.jsonl --pass-threshold 0.7
+- run: OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }} eval-harness run eval/cases.jsonl --pass-threshold 0.7
 ```
 
 ## Development

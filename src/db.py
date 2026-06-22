@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +24,9 @@ from src.models import (
 )
 
 CURRENT_SCHEMA_VERSION = 1
+
+# Setup logging
+logger = logging.getLogger(__name__)
 
 
 _SCHEMA_V1 = [
@@ -124,6 +128,27 @@ class Database:
         self.connection.execute("PRAGMA foreign_keys=ON;")
         self._migrate()
 
+    def _migrate(self) -> None:
+        """Apply all pending schema migrations idempotently."""
+        logger.debug("Starting database migration")
+        cur = self.connection.cursor()
+        for i, stmt in enumerate(_SCHEMA_V1):
+            logger.debug("Executing migration statement %d", i + 1)
+            cur.execute(stmt)
+        cur.execute("SELECT MAX(version) FROM schema_version;")
+        row = cur.fetchone()
+        current = row[0] if row and row[0] is not None else 0
+        if current < CURRENT_SCHEMA_VERSION:
+            logger.info("Migrating database from version %d to %d", current, CURRENT_SCHEMA_VERSION)
+            cur.execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (?, ?);",
+                (CURRENT_SCHEMA_VERSION, datetime.now(UTC).isoformat()),
+            )
+        else:
+            logger.debug("Database is already at version %d", current)
+        self.connection.commit()
+        logger.debug("Database migration completed")
+
     def close(self) -> None:
         """Close the underlying sqlite connection."""
         self.connection.close()
@@ -134,20 +159,39 @@ class Database:
     def __exit__(self, *_: object) -> None:
         self.close()
 
-    def _migrate(self) -> None:
-        """Apply all pending schema migrations idempotently."""
-        cur = self.connection.cursor()
-        for stmt in _SCHEMA_V1:
-            cur.execute(stmt)
-        cur.execute("SELECT MAX(version) FROM schema_version;")
-        row = cur.fetchone()
-        current = row[0] if row and row[0] is not None else 0
-        if current < CURRENT_SCHEMA_VERSION:
-            cur.execute(
-                "INSERT INTO schema_version (version, applied_at) VALUES (?, ?);",
-                (CURRENT_SCHEMA_VERSION, datetime.now(UTC).isoformat()),
+    def list_runs(self, limit: int = 100) -> list[EvalRun]:
+        """Return up to ``limit`` runs, newest first."""
+        logger.debug("Listing up to %d runs", limit)
+        cur = self.connection.execute(
+            """
+            SELECT run_id, created_at, config_json, record_count, rubric_id,
+                   judge_model, status, completed_at, mean_score, pass_rate,
+                   eval_time_seconds
+            FROM eval_runs
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        out: list[EvalRun] = []
+        for row in cur.fetchall():
+            out.append(
+                EvalRun(
+                    run_id=row[0],
+                    created_at=_parse_iso(row[1]) or datetime.now(UTC),
+                    config=json.loads(row[2]),
+                    record_count=row[3] or 0,
+                    rubric_id=row[4] or "faithfulness-v1",
+                    judge_model=row[5],
+                    status=RunStatus(row[6]),
+                    completed_at=_parse_iso(row[7]),
+                    mean_score=row[8],
+                    pass_rate=row[9],
+                    eval_time_seconds=row[10],
+                )
             )
-        self.connection.commit()
+        logger.debug("Found %d runs", len(out))
+        return out
 
     def get_schema_version(self) -> int:
         """Return the current schema version stored in the database."""
@@ -206,10 +250,13 @@ class Database:
 
     def get_run(self, run_id: str) -> EvalRun | None:
         """Return the run with ``run_id`` or None."""
+        logger.debug("Fetching run %s", run_id)
         cur = self.connection.execute("SELECT * FROM eval_runs WHERE run_id=?;", (run_id,))
         row = cur.fetchone()
         if not row:
+            logger.debug("Run %s not found", run_id)
             return None
+        logger.debug("Found run %s", run_id)
         return EvalRun(
             run_id=row["run_id"],
             created_at=_parse_iso(row["created_at"]),
@@ -224,22 +271,9 @@ class Database:
             eval_time_seconds=row["eval_time_seconds"],
         )
 
-    def list_runs(self, limit: int = 100) -> list[EvalRun]:
-        """Return up to ``limit`` runs, newest first."""
-        cur = self.connection.execute(
-            "SELECT run_id FROM eval_runs ORDER BY created_at DESC LIMIT ?;",
-            (limit,),
-        )
-        ids = [r[0] for r in cur.fetchall()]
-        out: list[EvalRun] = []
-        for rid in ids:
-            run = self.get_run(rid)
-            if run is not None:
-                out.append(run)
-        return out
-
     def insert_record(self, record: EvalRecord) -> None:
         """Insert a single eval record."""
+        logger.debug("Inserting record %s for run %s", record.record_id, record.run_id)
         if not record.run_id:
             raise ValueError("record.run_id is required")
         self.connection.execute(
@@ -261,6 +295,7 @@ class Database:
             ),
         )
         self.connection.commit()
+        logger.debug("Inserted record %s", record.record_id)
 
     def get_records(self, run_id: str) -> list[EvalRecord]:
         """Return all records for a run in insertion order."""
@@ -286,6 +321,7 @@ class Database:
 
     def insert_result(self, result: EvalResult) -> None:
         """Insert a judge evaluation result."""
+        logger.debug("Inserting result for record %s (judge: %s)", result.record_id, result.judge_model)
         self.connection.execute(
             """
             INSERT INTO eval_results (
@@ -318,9 +354,11 @@ class Database:
             ),
         )
         self.connection.commit()
+        logger.debug("Inserted result %s", result.result_id)
 
     def get_results(self, run_id: str) -> list[EvalResult]:
         """Return all results for a run in insertion order."""
+        logger.debug("Fetching results for run %s", run_id)
         cur = self.connection.execute(
             "SELECT * FROM eval_results WHERE run_id=? ORDER BY evaluated_at;",
             (run_id,),
@@ -349,16 +387,20 @@ class Database:
                     error=row["error"],
                 )
             )
+        logger.debug("Found %d results for run %s", len(out), run_id)
         return out
 
     def get_result_for_record(self, record_id: str) -> EvalResult | None:
         """Return the first result associated with a record (or None)."""
+        logger.debug("Fetching result for record %s", record_id)
         cur = self.connection.execute(
             "SELECT * FROM eval_results WHERE record_id=? LIMIT 1;", (record_id,)
         )
         row = cur.fetchone()
         if not row:
+            logger.debug("No result found for record %s", record_id)
             return None
+        logger.debug("Found result for record %s", record_id)
         return EvalResult(
             result_id=row["result_id"],
             record_id=row["record_id"],
@@ -382,6 +424,7 @@ class Database:
 
     def put_cache(self, entry: JudgeCacheEntry) -> None:
         """Upsert a judge cache entry."""
+        logger.debug("Caching result for key %s (model: %s)", entry.cache_key[:16], entry.model_id)
         self.connection.execute(
             """
             INSERT INTO judge_cache (
