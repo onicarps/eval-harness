@@ -1,0 +1,17 @@
+model:
+  default: nvidia/nemotron-3-super-120b-a12b:free
+  provider: openrouter
+toolsets:
+- terminal
+- file
+- web
+- skills
+approvals:
+  mode: ask
+terminal:
+  backend: local
+  timeout: 120
+onboarding:
+  seen:
+    tool_progress_prompt: true
+    busy_input_prompt: true
