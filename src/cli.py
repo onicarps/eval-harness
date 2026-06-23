@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
 import sys
 import time
 from pathlib import Path
+from typing import cast
 
 import typer
 from dotenv import load_dotenv
@@ -122,7 +124,7 @@ def run_cmd(
         limit=limit,
     )
     if str(file) == "-":
-        records = list(ingest_stdin(sys.stdin, fmt=format, options=options))
+        records = list(ingest_stdin(cast(io.TextIOBase, sys.stdin), fmt=format, options=options))
     else:
         if not file.exists():
             console.print(f"[red]file not found: {file}[/red]")
@@ -234,8 +236,8 @@ def run_cmd(
         elapsed = time.monotonic() - start
         logger.info("Evaluation completed in %.2f seconds", elapsed)
 
-        for r in results:
-            db.insert_result(r)
+        for result in results:
+            db.insert_result(result)
         run.status = RunStatus.COMPLETED
         run.eval_time_seconds = elapsed
         summary = build_summary(run, results)

@@ -71,7 +71,7 @@ class JudgeRegistry:
             return list(DEFAULT_JUDGE_MODELS)
         return models or list(DEFAULT_JUDGE_MODELS)
 
-    def fetch(self, refresh: bool = False, api_key: str | None = None) -> list[JudgeModel]:
+    def fetch(self, refresh: bool = False, api_key: str | None = None) -> list[JudgeModel]:  # type: ignore[valid-type]
         """Fetch and cache the latest free model list.
 
         Args:

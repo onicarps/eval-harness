@@ -49,10 +49,15 @@ class IngestOptions:
 
 
 def _parse_since(value: str | None) -> datetime | None:
-    """Parse a since-date string into a datetime; return None if missing."""
+    """Parse a since-date string into a timezone-aware datetime; return None if missing."""
     if not value:
         return None
-    return datetime.fromisoformat(value)
+    dt = datetime.fromisoformat(value)
+    # Ensure timezone-aware for consistent comparison with UTC timestamps
+    if dt.tzinfo is None:
+        from datetime import UTC
+        dt = dt.replace(tzinfo=UTC)
+    return dt
 
 
 def _row_after_since(row_ts: str | None, since: datetime | None) -> bool:
@@ -61,6 +66,9 @@ def _row_after_since(row_ts: str | None, since: datetime | None) -> bool:
         return since is None
     try:
         dt = datetime.fromisoformat(row_ts)
+        if dt.tzinfo is None:
+            from datetime import UTC
+            dt = dt.replace(tzinfo=UTC)
     except ValueError:
         return False
     return dt >= since

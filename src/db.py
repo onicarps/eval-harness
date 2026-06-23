@@ -104,6 +104,21 @@ _MIGRATIONS: dict[int, list[str]] = {
     ],
 }
 
+# Rollback SQL for each migration version.  _rollback(version) applies these
+# statements in reverse order to downgrade from version to version-1.
+_ROLLBACKS: dict[int, list[str]] = {
+    1: [
+        "DROP TABLE IF EXISTS judge_cache;",
+        "DROP INDEX IF EXISTS idx_results_record;",
+        "DROP INDEX IF EXISTS idx_results_run;",
+        "DROP TABLE IF EXISTS eval_results;",
+        "DROP INDEX IF EXISTS idx_records_run;",
+        "DROP TABLE IF EXISTS eval_records;",
+        "DROP TABLE IF EXISTS eval_runs;",
+        "DROP TABLE IF EXISTS schema_version;",
+    ],
+}
+
 
 def _iso(dt: datetime | None) -> str | None:
     """Return ISO-8601 string for datetime, or None."""
@@ -113,6 +128,14 @@ def _iso(dt: datetime | None) -> str | None:
 def _parse_iso(s: str | None) -> datetime | None:
     """Parse ISO-8601 string back to datetime; return None for empty input."""
     return datetime.fromisoformat(s) if s else None
+
+
+def _parse_iso_required(s: str) -> datetime:
+    """Parse ISO-8601 string back to datetime; raises on empty input."""
+    result = _parse_iso(s)
+    if result is None:
+        raise ValueError(f"expected non-empty ISO-8601 datetime, got: {s!r}")
+    return result
 
 
 class Database:
@@ -176,6 +199,41 @@ class Database:
         if current >= CURRENT_SCHEMA_VERSION:
             logger.debug("Database is already at version %d (latest: %d)", current, CURRENT_SCHEMA_VERSION)
         logger.debug("Database migration completed")
+
+    def rollback(self, target_version: int) -> None:
+        """Downgrade the database to the given schema version.
+
+        Args:
+            target_version: The version to downgrade to.  Must be >= 0 and
+                less than the current version.
+
+        Raises:
+            RuntimeError: If no rollback is defined for a version, or if
+                the target version is invalid.
+        """
+        cur = self.connection.cursor()
+        cur.execute("SELECT MAX(version) FROM schema_version;")
+        row = cur.fetchone()
+        current = row[0] if row and row[0] is not None else 0
+
+        if target_version < 0:
+            raise RuntimeError(f"target version must be >= 0, got {target_version}")
+        if target_version >= current:
+            raise RuntimeError(
+                f"target version {target_version} must be less than current version {current}"
+            )
+
+        for version in range(current, target_version, -1):
+            stmts = _ROLLBACKS.get(version)
+            if stmts is None:
+                raise RuntimeError(f"no rollback defined for schema version {version}")
+            logger.info("Rolling back from version %d to %d", version, version - 1)
+            for stmt in stmts:
+                logger.debug("  rollback: %s", stmt.strip()[:80])
+                cur.execute(stmt)
+            cur.execute("DELETE FROM schema_version WHERE version = ?;", (version,))
+            self.connection.commit()
+            logger.info("Rollback to version %d complete", version - 1)
 
     def close(self) -> None:
         """Close the underlying sqlite connection."""
@@ -287,7 +345,7 @@ class Database:
         logger.debug("Found run %s", run_id)
         return EvalRun(
             run_id=row["run_id"],
-            created_at=_parse_iso(row["created_at"]),
+            created_at=_parse_iso_required(row["created_at"]),
             config=json.loads(row["config_json"]),
             record_count=row["record_count"] or 0,
             rubric_id=row["rubric_id"] or "faithfulness-v1",
@@ -342,7 +400,7 @@ class Database:
                     reference_text=row["reference_text"],
                     source_file=row["source_file"],
                     metadata=json.loads(row["metadata_json"] or "{}"),
-                    created_at=_parse_iso(row["created_at"]),
+                    created_at=_parse_iso_required(row["created_at"]),
                 )
             )
         return out
@@ -411,7 +469,7 @@ class Database:
                     judge_fallbacks=row["judge_fallbacks"] or 0,
                     judge_tried=json.loads(row["judge_tried"] or "[]"),
                     tokens_estimated=row["tokens_estimated"],
-                    evaluated_at=_parse_iso(row["evaluated_at"]),
+                    evaluated_at=_parse_iso_required(row["evaluated_at"]),
                     error=row["error"],
                 )
             )
@@ -446,7 +504,7 @@ class Database:
             judge_fallbacks=row["judge_fallbacks"] or 0,
             judge_tried=json.loads(row["judge_tried"] or "[]"),
             tokens_estimated=row["tokens_estimated"],
-            evaluated_at=_parse_iso(row["evaluated_at"]),
+            evaluated_at=_parse_iso_required(row["evaluated_at"]),
             error=row["error"],
         )
 
@@ -484,7 +542,7 @@ class Database:
             model_id=row["model_id"],
             rubric_version=row["rubric_version"],
             response=json.loads(row["response_json"]),
-            created_at=_parse_iso(row["created_at"]),
+            created_at=_parse_iso_required(row["created_at"]),
             hits=row["hits"] or 1,
         )
 

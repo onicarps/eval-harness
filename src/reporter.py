@@ -7,6 +7,7 @@ import io
 import json
 from collections import Counter
 from pathlib import Path
+from typing import cast
 
 from rich.console import Console
 from rich.table import Table
@@ -99,7 +100,8 @@ def render_table(summary: EvalSummary) -> str:
         for k, v in summary.judge_usage.items():
             usage.add_row(k, str(v))
         console.print(usage)
-    return console.file.getvalue()
+    # Rich uses StringIO internally; IO[str] stub lacks getvalue()
+    return cast(str, console.file.getvalue())  # type: ignore[attr-defined]
 
 
 def print_table(summary: EvalSummary, console: Console | None = None) -> None:

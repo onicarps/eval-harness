@@ -19,7 +19,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -77,19 +77,19 @@ def extract_judge_json(content: str) -> dict[str, Any]:
     """
     s = content.strip()
     try:
-        return json.loads(s)
+        return cast(dict[str, Any], json.loads(s))
     except json.JSONDecodeError:
         pass
     m = _JSON_BLOCK_RE.search(s)
     if m:
         try:
-            return json.loads(m.group(1))
+            return cast(dict[str, Any], json.loads(m.group(1)))
         except json.JSONDecodeError:
             pass
     m = _FALLBACK_OBJ_RE.search(s)
     if m:
         try:
-            return json.loads(m.group(1))
+            return cast(dict[str, Any], json.loads(m.group(1)))
         except json.JSONDecodeError:
             pass
     raise ValueError("could not parse JSON from judge response")
