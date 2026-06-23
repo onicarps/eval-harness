@@ -103,6 +103,7 @@ class EvalRun(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
     record_count: int = 0
     rubric_id: str = "faithfulness-v1"
+    rubric_template_id: str | None = None
     judge_model: str | None = None
     status: RunStatus = RunStatus.RUNNING
     completed_at: datetime | None = None

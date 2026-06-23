@@ -104,8 +104,9 @@ CREATE TABLE judge_cache (
 Combined: 0.5 * faithfulness + 0.5 * task_completion. Pass/fail threshold: 0.7.
 
 ## CLI Commands
-- `eval-harness run <file>` — primary: ingest + evaluate + report. Flags: --format jsonl|csv, --input-col, --output-col, --reference-col, --sample N, --since DATE, --limit N, --judge MODEL, --no-fallback, --max-fallbacks N, --pass-threshold FLOAT, --output json|table, --output-file PATH, --dry-run, --resume, --timeout SECONDS, --rpm-limit INT, --yes, --verbose, --quiet, --config PATH
+- `eval-harness run <file>` — primary: ingest + evaluate + report. Flags: --format jsonl|csv, --input-col, --output-col, --reference-col, --sample N, --since DATE, --limit N, --judge MODEL, --no-fallback, --max-fallbacks N, --pass-threshold FLOAT, --output json|table, --output-file PATH, --dry-run, --resume, --timeout SECONDS, --rpm-limit INT, --yes, --verbose, --quiet
 - `eval-harness judges` — list free judge models. Flags: --refresh, --json
+- `eval-harness list-runs [--limit N] [--json]` — list previous evaluation runs
 - `eval-harness report --run-id UUID` — show results. Flags: --output json|table|csv, --output-file PATH
 - `eval-harness export --run-id UUID --format json|csv --output-file PATH`
 - `eval-harness cache [--clear] [--stats]`
