@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -29,6 +30,7 @@ from src.reporter import (
     render_table,
 )
 from src.rubric import RubricManager
+from src.trend import MIN_RUNS_DISPLAY, compute_trends
 
 # Load environment variables from .env file
 # Check for custom env path via OPENROUTER_ENV_PATH, then fallback to default
@@ -51,6 +53,7 @@ def _setup_logging(verbose: bool) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+
 
 DEFAULT_DB_PATH = Path.home() / ".eval-harness" / "eval.db"
 
@@ -491,3 +494,105 @@ def rubric_cmd(
             raise typer.Exit(code=1) from None
     finally:
         db.close()
+
+
+@app.command("trend", help="Show score timeline and regression detection.")
+def trend_cmd(
+    rubric_template_id: str | None = typer.Option(None, "--rubric", help="Filter by rubric template ID."),
+    judge_model: str | None = typer.Option(None, "--judge", help="Filter by judge model."),
+    since: str | None = typer.Option(None, "--since", help="Only show runs after this date (ISO-8601)."),
+    json_out: bool = typer.Option(False, "--json"),
+    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db"),
+) -> None:
+    """Show score timeline and regression detection."""
+    db = Database(db_path)
+    try:
+        since_dt = None
+        if since:
+            try:
+                since_dt = datetime.fromisoformat(since)
+                if since_dt.tzinfo is None:
+                    since_dt = since_dt.replace(tzinfo=UTC)
+            except ValueError:
+                typer.echo(f"invalid date: {since}", err=True)
+                raise typer.Exit(code=2) from None
+
+        result = compute_trends(
+            db,
+            rubric_template_id=rubric_template_id,
+            judge_model=judge_model,
+            since=since_dt,
+        )
+
+        if json_out:
+            typer.echo(json.dumps({
+                "total_runs": result.total_runs,
+                "has_regression": result.has_regression,
+                "mean_score_overall": result.mean_score_overall,
+                "latest_score": result.latest_score,
+                "earliest_score": result.earliest_score,
+                "points": [
+                    {
+                        "run_id": p.run_id[:8],
+                        "created_at": p.created_at.isoformat() if p.created_at else None,
+                        "mean_score": p.mean_score,
+                        "pass_rate": p.pass_rate,
+                        "record_count": p.record_count,
+                        "is_regression": p.is_regression,
+                    }
+                    for p in result.points
+                ],
+            }, indent=2, default=str))
+            return
+
+        console = Console()
+        if result.total_runs < MIN_RUNS_DISPLAY:
+            console.print(
+                f"[yellow]need at least {MIN_RUNS_DISPLAY} completed runs for trend display, "
+                f"found {result.total_runs}[/yellow]"
+            )
+            return
+
+        # Summary
+        console.print(f"[bold]Score Trend[/bold] — {result.total_runs} runs")
+        if result.mean_score_overall is not None:
+            console.print(f"  Mean score: {result.mean_score_overall:.3f}")
+        if result.latest_score is not None and result.earliest_score is not None:
+            delta = result.latest_score - result.earliest_score
+            direction = "up" if delta >= 0 else "down"
+            console.print(
+                f"  Earliest: {result.earliest_score:.3f} → Latest: {result.latest_score:.3f} "
+                f"({direction} {abs(delta):.3f})"
+            )
+        if result.has_regression:
+            console.print("  [red]⚠ Regression detected[/red]")
+
+        # Timeline table
+        table = Table(title="Run Timeline")
+        table.add_column("Run ID", style="cyan", no_wrap=True)
+        table.add_column("Date", style="dim")
+        table.add_column("Records", justify="right")
+        table.add_column("Mean Score", justify="right")
+        table.add_column("Pass Rate", justify="right")
+        table.add_column("", justify="center")
+
+        for p in result.points:
+            score_str = f"{p.mean_score:.3f}" if p.mean_score is not None else "-"
+            pass_str = f"{p.pass_rate:.1%}" if p.pass_rate is not None else "-"
+            regression_marker = "[red]▼[/red]" if p.is_regression else ""
+            date_str = p.created_at.strftime("%Y-%m-%d") if p.created_at != datetime.min else "-"
+            table.add_row(
+                p.run_id[:8],
+                date_str,
+                str(p.record_count),
+                score_str,
+                pass_str,
+                regression_marker,
+            )
+        console.print(table)
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":  # pragma: no cover
+    app()
