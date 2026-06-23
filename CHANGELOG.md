@@ -27,6 +27,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced `evaluated_at or 0` sort key with a tz-aware `datetime` sentinel so
   the fallback path can never raise `TypeError` when ordering results.
 
+## [0.2.0] - 2026-06-23
+
+### Added
+- `eval-harness rubric` command — manage rubric templates (--list, --show, --create-name/--create-file, --delete).
+- `eval-harness trend` command — score timeline with regression detection (--rubric, --judge, --since, --json).
+- `rubric_templates` database table with 5 built-in templates (faithfulness-v1, safety-v1, accuracy-v1, conciseness-v1, custom-v1).
+- `rubric_template_id` column on `eval_runs` for tracking which rubric was used.
+- `Database.rollback(target_version)` method for migration downgrades.
+- `pyyaml>=6.0` dependency for YAML parsing of rubric templates.
+- `src/rubric.py` module — RubricTemplate and RubricManager classes.
+- `src/trend.py` module — TrendPoint, TrendResult, compute_trends() with regression detection.
+- 18 new tests in `test_rubric.py` for template CRUD and validation.
+
+### Changed
+- `CURRENT_SCHEMA_VERSION` bumped to 2.
+- `insert_run`, `update_run`, `get_run`, `list_runs` updated to handle `rubric_template_id`.
+- `--verbose` is now a global option (via `@app.callback()`) available on all commands.
+
 ## [0.1.1] - 2026-06-23
 
 ### Added
