@@ -23,7 +23,7 @@ from src.models import (
     RunStatus,
 )
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -114,6 +114,9 @@ _MIGRATIONS: dict[int, list[str]] = {
         """,
         "ALTER TABLE eval_runs ADD COLUMN rubric_template_id TEXT;",
     ],
+    3: [
+        "ALTER TABLE eval_results ADD COLUMN feedback TEXT DEFAULT '';",
+    ],
 }
 
 # Rollback SQL for each migration version.  _rollback(version) applies these
@@ -132,6 +135,9 @@ _ROLLBACKS: dict[int, list[str]] = {
     2: [
         "ALTER TABLE eval_runs DROP COLUMN rubric_template_id;",
         "DROP TABLE IF EXISTS rubric_templates;",
+    ],
+    3: [
+        "ALTER TABLE eval_results DROP COLUMN feedback;",
     ],
 }
 
@@ -473,7 +479,6 @@ class Database:
 
     def insert_result(self, result: EvalResult) -> None:
         """Insert a judge evaluation result."""
-        logger.debug("Inserting result for record %s (judge: %s)", result.record_id, result.judge_model)
         self.connection.execute(
             """
             INSERT INTO eval_results (
@@ -481,8 +486,8 @@ class Database:
                 faithfulness, task_completion, combined_score, pass_fail,
                 reasoning, faithfulness_reasoning, task_completion_reasoning,
                 judge_model, judge_fallbacks, judge_tried, tokens_estimated,
-                evaluated_at, error
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                evaluated_at, error, feedback
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
             (
                 result.result_id,
@@ -503,6 +508,7 @@ class Database:
                 result.tokens_estimated,
                 _iso(result.evaluated_at),
                 result.error,
+                result.feedback,
             ),
         )
         self.connection.commit()
@@ -537,6 +543,7 @@ class Database:
                     tokens_estimated=row["tokens_estimated"],
                     evaluated_at=_parse_iso_required(row["evaluated_at"]),
                     error=row["error"],
+                    feedback=row["feedback"] or None,
                 )
             )
         logger.debug("Found %d results for run %s", len(out), run_id)
@@ -572,6 +579,7 @@ class Database:
             tokens_estimated=row["tokens_estimated"],
             evaluated_at=_parse_iso_required(row["evaluated_at"]),
             error=row["error"],
+            feedback=row["feedback"] or None,
         )
 
     def put_cache(self, entry: JudgeCacheEntry) -> None:

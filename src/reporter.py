@@ -12,7 +12,7 @@ from typing import cast
 from rich.console import Console
 from rich.table import Table
 
-from src.models import EvalResult, EvalRun, EvalSummary, PassFail
+from src.models import EvalRecord, EvalResult, EvalRun, EvalSummary, PassFail
 
 
 def build_summary(run: EvalRun, results: list[EvalResult]) -> EvalSummary:
@@ -101,6 +101,61 @@ def render_table(summary: EvalSummary) -> str:
             usage.add_row(k, str(v))
         console.print(usage)
     # Rich uses StringIO internally; IO[str] stub lacks getvalue()
+    return cast(str, console.file.getvalue())  # type: ignore[attr-defined]
+
+
+def render_comparison_table(
+    records: list[EvalRecord],
+    results: list[EvalResult],
+    judges: list[str],
+) -> str:
+    """Render a side-by-side judge comparison table.
+
+    Args:
+        records: The evaluated records.
+        results: All results (from multiple judges).
+        judges: Ordered list of judge model names.
+
+    Returns:
+        Rich-formatted table string.
+    """
+    console = Console(file=io.StringIO(), force_terminal=False, width=120)
+    table = Table(title="Judge Comparison")
+    table.add_column("Record", max_width=30)
+    for judge in judges:
+        short = judge.split("/")[-1][:16] if "/" in judge else judge[:16]
+        table.add_column(short, justify="center")
+    table.add_column("Std Dev", justify="center")
+    table.add_column("Agree", justify="center")
+
+    rec_map = {r.record_id: r for r in records}
+    for record in records:
+        rec_results = [r for r in results if r.record_id == record.record_id]
+        if not rec_results:
+            continue
+        scores = []
+        row = [record.input_text[:28] + "..." if len(record.input_text) > 28 else record.input_text]
+        for judge in judges:
+            jr = next((r for r in rec_results if r.judge_model == judge), None)
+            if jr:
+                scores.append(jr.combined_score)
+                row.append(f"{jr.combined_score:.2f}")
+            else:
+                row.append("-")
+        # Compute std dev
+        import statistics
+        if len(scores) >= 2:
+            std = statistics.pstdev(scores)
+            row.append(f"{std:.3f}")
+        else:
+            row.append("-")
+        # Pass/fail agreement
+        passes = sum(1 for s in scores if s >= 0.7)
+        agrees = "yes" if passes == 0 or passes == len(scores) else "no"
+        row.append(agrees)
+        table.add_row(*row)
+
+    console.print(table)
     return cast(str, console.file.getvalue())  # type: ignore[attr-defined]
 
 

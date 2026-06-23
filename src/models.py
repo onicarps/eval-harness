@@ -84,6 +84,7 @@ class EvalResult(BaseModel):
     tokens_estimated: int | None = None
     evaluated_at: datetime = Field(default_factory=_utcnow)
     error: str | None = None
+    feedback: str | None = None
 
     @field_validator("faithfulness", "task_completion", "combined_score")
     @classmethod

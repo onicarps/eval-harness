@@ -122,6 +122,9 @@ def run_cmd(
     rpm_limit: int | None = typer.Option(None, "--rpm-limit"),
     yes: bool = typer.Option(False, "--yes"),
     quiet: bool = typer.Option(False, "--quiet"),
+    feedback: bool = typer.Option(False, "--feedback", help="Generate improvement suggestions for low-scoring records"),
+    compare_judges: bool = typer.Option(False, "--compare-judges", help="Show side-by-side judge comparison"),
+    degrade: bool = typer.Option(False, "--degrade", help="Use local heuristic fallback when judge API is unreachable"),
     db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db"),
     judges_cache: Path | None = typer.Option(None, "--judges-cache"),
 ) -> None:
@@ -220,6 +223,7 @@ def run_cmd(
                 pass_threshold=pass_threshold,
                 max_fallbacks=max_fallbacks,
                 no_fallback=no_fallback,
+                degrade=degrade,
             ),
         )
 
@@ -248,6 +252,18 @@ def run_cmd(
         elapsed = time.monotonic() - start
         logger.info("Evaluation completed in %.2f seconds", elapsed)
 
+        # Generate feedback for failed records if requested
+        if feedback and results:
+            logger.info("Generating feedback for failed records")
+            console.print("[dim]Generating improvement suggestions...[/dim]")
+            try:
+                asyncio.run(
+                    evaluator.generate_all_feedback(run, records, results)
+                )
+            except Exception as exc:
+                console.print(f"[yellow]Feedback generation failed: {exc}[/yellow]")
+                logger.error("Feedback generation error: %s", exc, exc_info=True)
+
         for result in results:
             db.insert_result(result)
         run.status = RunStatus.COMPLETED
@@ -258,6 +274,23 @@ def run_cmd(
         db.update_run(run)
         logger.info("Updated run %s: mean_score=%.3f, pass_rate=%.3f",
                    run.run_id, run.mean_score, run.pass_rate)
+
+        # Display feedback section if any was generated
+        if feedback and results:
+            feedback_results = [r for r in results if r.feedback]
+            if feedback_results:
+                console.print("\n[bold cyan]═══ Improvement Suggestions ═══[/bold cyan]")
+                for r in feedback_results:
+                    rec = next((rec for rec in records if rec.record_id == r.record_id), None)
+                    if rec:
+                        console.print(f"\n[bold]Record:[/bold] {rec.input_text[:80]}...")
+                        console.print(f"[dim]Score: {r.combined_score:.2f}[/dim]")
+                        try:
+                            fb_data = json.loads(r.feedback)
+                            for i, s in enumerate(fb_data.get("suggestions", []), 1):
+                                console.print(f"  {i}. {s}")
+                        except (json.JSONDecodeError, TypeError):
+                            console.print(f"  {r.feedback}")
 
         if output == "json":
             payload = summary.model_dump(mode="json")
@@ -271,6 +304,29 @@ def run_cmd(
                 Path(output_file).write_text(render_table(summary))
             else:
                 print_table(summary, console=console)
+
+        # Display judge comparison if requested
+        if compare_judges and results:
+            from src.reporter import render_comparison_table
+            judges_used = list(dict.fromkeys(r.judge_model for r in results if r.judge_model))
+            if len(judges_used) >= 2:
+                comparison = render_comparison_table(records, results, judges_used)
+                console.print("")
+                console.print("[bold cyan]═══ Judge Comparison ═══[/bold cyan]")
+                console.print(comparison)
+                # Summary stats
+                total_recs = len(set(r.record_id for r in results))
+                disagree = sum(
+                    1 for rec in records
+                    if len({r.combined_score for r in results if r.record_id == rec.record_id}) > 1
+                )
+                console.print("")
+                console.print(f"[dim]Records evaluated: {total_recs}[/dim]")
+                judges_str = ", ".join(judges_used)
+                console.print(f"[dim]Judges used: {judges_str}[/dim]")
+                console.print(f"[dim]Records with disagreement: {disagree}/{total_recs}[/dim]")
+            else:
+                console.print("[yellow]Need 2+ judges for comparison (use --judge to specify multiple)[/yellow]")
 
         if summary.failed == 0:
             logger.info("Evaluation passed: %d/%d records passed",

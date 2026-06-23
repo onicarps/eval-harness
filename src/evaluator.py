@@ -55,6 +55,7 @@ class EvaluatorConfig:
     max_fallbacks: int = 3
     no_fallback: bool = False
     use_cache: bool = True
+    degrade: bool = False
 
 
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
@@ -130,6 +131,19 @@ def cache_key_for(
     return h.hexdigest()
 
 
+def _build_feedback_prompt(combined_score: float, faithfulness: float, task_completion: float, input_text: str, output_text: str, reference_text: str) -> str:
+    """Build the feedback prompt for a low-scoring record."""
+    return (
+        "You are an evaluation assistant. A model produced the following output for "
+        "the given input. The output scored " + f"{combined_score:.2f} "
+        + "(faithfulness: " + f"{faithfulness:.2f}" + ", task_completion: " + f"{task_completion:.2f}" + "). "
+        + "Provide 2-3 specific, actionable suggestions to improve the score. "
+        + "Return STRICT JSON only with the key 'suggestions' as a list of strings. "
+        + 'Example: {"suggestions": ["suggestion1", "suggestion2"]}. '
+        + "\nINPUT:\n" + input_text + "\n\nOUTPUT:\n" + output_text + "\n\nREFERENCE:\n" + (reference_text or "(none)") + "\n"
+    )
+
+
 def combine_scores(faithfulness: float, task_completion: float) -> float:
     """Compute combined score as a balanced 50/50 average.
 
@@ -144,6 +158,33 @@ def combine_scores(faithfulness: float, task_completion: float) -> float:
 def pass_fail_from(score: float, threshold: float) -> PassFail:
     """Return PASS when ``score`` >= ``threshold``, otherwise FAIL."""
     return PassFail.PASS if score >= threshold else PassFail.FAIL
+
+
+def local_heuristic_score(record: EvalRecord) -> dict[str, Any]:
+    """Compute a local heuristic score when the judge API is unavailable.
+
+    Uses keyword overlap and response length as rough quality signals.
+    Returns a dict matching the judge output schema.
+    """
+    input_words = set(record.input_text.lower().split())
+    output_words = set(record.output_text.lower().split())
+    # Faithfulness: overlap between input and output (Jaccard-like)
+    if input_words:
+        overlap = len(input_words & output_words) / len(input_words)
+        faithfulness = min(1.0, overlap * 2.0)  # scale up a bit
+    else:
+        overlap = 0.0
+        faithfulness = 0.5
+    # Task completion: length-based heuristic (longer = more complete, capped)
+    output_len = len(record.output_text.split())
+    task_completion = min(1.0, output_len / 50.0)  # 50 words = "complete"
+    return {
+        "faithfulness": round(faithfulness, 2),
+        "task_completion": round(task_completion, 2),
+        "reasoning": "Local heuristic fallback (API unavailable)",
+        "faithfulness_reasoning": f"Keyword overlap: {overlap:.1%} of input words found in output",
+        "task_completion_reasoning": f"Output length: {output_len} words (heuristic threshold: 50)",
+    }
 
 
 def _render_prompt(rubric: RubricTemplate, record: EvalRecord) -> str:
@@ -238,6 +279,33 @@ class LLMEvaluator:
         logger.info("Evaluation completed for %d records", len(results))
         return results
 
+    async def generate_all_feedback(
+        self,
+        run: EvalRun,
+        records: list[EvalRecord],
+        results: list[EvalResult],
+    ) -> None:
+        """Generate improvement suggestions for all low-scoring records.
+
+        Evaluates feedback only for records below pass_threshold.
+        Updates results in-place and persists to DB.
+        """
+        logger.info("Generating feedback for low-scoring records")
+        rec_map = {r.record_id: r for r in records}
+        async with httpx.AsyncClient(timeout=self.config.timeout) as client:
+            for result in results:
+                if result.pass_fail == PassFail.PASS:
+                    continue
+                if result.error:
+                    continue
+                record = rec_map.get(result.record_id)
+                if record is None:
+                    continue
+                feedback = await self.generate_feedback(client, record, result)
+                if feedback:
+                    result.feedback = feedback
+        logger.info("Feedback generation completed")
+
     async def _evaluate_one(
         self,
         client: httpx.AsyncClient,
@@ -311,6 +379,19 @@ class LLMEvaluator:
                     tokens=tokens,
                 )
 
+            # If degrade mode is enabled, use local heuristic fallback
+            if self.config.degrade:
+                logger.warning("All judges failed for record %s, using local heuristic", record.record_id)
+                heuristic = local_heuristic_score(record)
+                data = heuristic
+                return self._build_result(
+                    record=record,
+                    run=run,
+                    judge="local-heuristic",
+                    tried=tried + ["local-heuristic"],
+                    data=data,
+                    tokens=tokens,
+                )
             logger.error("All judges failed for record %s", record.record_id)
             return EvalResult(
                 record_id=record.record_id,
@@ -366,6 +447,65 @@ class LLMEvaluator:
         content = body["choices"][0]["message"]["content"]
         logger.debug("OpenRouter API returned content length: %d", len(content))
         return extract_judge_json(content)
+
+    async def generate_feedback(
+        self,
+        client: httpx.AsyncClient,
+        record: EvalRecord,
+        result: EvalResult,
+    ) -> str | None:
+        """Generate improvement suggestions for a low-scoring record.
+
+        Calls the primary judge with a feedback prompt and extracts
+        suggestions from the JSON response.
+
+        Returns:
+            Feedback string (JSON with suggestions) or None on error.
+        """
+        logger.debug("Generating feedback for record %s", record.record_id)
+        prompt = _build_feedback_prompt(
+            combined_score=result.combined_score,
+            faithfulness=result.faithfulness,
+            task_completion=result.task_completion,
+            input_text=record.input_text,
+            output_text=record.output_text,
+            reference_text=record.reference_text or "(none)",
+        )
+        headers = {
+            "Authorization": f"Bearer {self.config.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self.config.judges[0],
+            "messages": [
+                {"role": "system", "content": "You are a helpful improvement advisor."},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.3,
+        }
+        try:
+            resp = await client.post(
+                OPENROUTER_URL,
+                headers=headers,
+                json=payload,
+                timeout=httpx.Timeout(self.config.timeout, connect=10.0),
+            )
+            if resp.status_code >= 400:
+                logger.warning("Feedback API error %d for record %s", resp.status_code, record.record_id)
+                return None
+            body = resp.json()
+            content = body["choices"][0]["message"]["content"]
+            data = extract_judge_json(content)
+            suggestions = data.get("suggestions", [])
+            if suggestions:
+                feedback = json.dumps({"suggestions": suggestions})
+                logger.debug("Generated %d suggestions for record %s", len(suggestions), record.record_id)
+                return feedback
+            logger.debug("No suggestions in feedback response for record %s", record.record_id)
+            return None
+        except Exception as exc:
+            logger.warning("Feedback generation failed for record %s: %s", record.record_id, exc)
+            return None
 
     def _build_result(
         self,
