@@ -8,15 +8,16 @@ Usage::
 
     eval-harness calibrate data.jsonl          # default: all judges
     eval-harness calibrate data.jsonl --sample 10
-    eval-harness calibrate data.jsonl --output table
     eval-harness calibrate data.jsonl --json --output-file calibrate.json
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
-import statistics
 import logging
+import re
+import statistics
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,58 +26,20 @@ from typing import Any, cast
 from src.db import Database
 from src.ingest import IngestOptions, ingest_file, ingest_stdin
 from src.judges import JudgeRegistry
-from src.models import EvalRecord, EvalResult, EvalRun, PassFail, RubricTemplate
-from src.reporter import render_table
+from src.models import (
+    EvalRecord,
+    EvalResult,
+    EvalRun,
+    PassFail,
+    RubricTemplate,
+    RunStatus,
+    _new_id,
+)
 
 logger = logging.getLogger(__name__)
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
-
-@dataclass
-class CalibrationScore:
-    """A single judge's combined score for one record."""
-
-    record_id: str
-    run_id: str
-    judge: str
-    combined_score: float
-    faithfulness: float
-    task_completion: float
-    pass_fail: PassFail
-
-
-@dataclass
-class CalibrationResult:
-    """Aggregated scores for a single record across all judges."""
-
-    record_id: str
-    run_id: str
-    scores: list[CalibrationScore] = field(default_factory=list)
-
-    @classmethod
-    def from_results(
-        cls,
-        results: list[EvalResult],
-        record_id: str,
-        run_id: str,
-    ) -> "CalibrationResult":
-        """Group ``EvalResult`` entries by record_id."""
-        filtered = [r for r in results if r.record_id == record_id]
-        scores = [
-            CalibrationScore(
-                record_id=record_id,
-                run_id=run_id,
-                judge=r.judge_model,
-                combined_score=r.combined_score,
-                faithfulness=r.faithfulness,
-                task_completion=r.task_completion,
-                pass_fail=r.pass_fail,
-            )
-            for r in filtered
-        ]
-        return cls(record_id=record_id, run_id=run_id, scores=scores)
-
 
 @dataclass
 class CalibrationSummary:
@@ -90,7 +53,7 @@ class CalibrationSummary:
     median_std_dev: float = 0.0
     mean_faithfulness: float = 0.0
     mean_task_completion: float = 0.0
-    pass_agreement_rate: float = 1.0
+    pass_agreement_rate: float | None = None  # None when no data
     disagreements: list[dict[str, Any]] = field(default_factory=list)
     judge_agreement: dict[str, dict[str, float]] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -126,7 +89,12 @@ class CalibrationSummary:
             tasks = [r.task_completion for r in rec_results]
             passes = [r.pass_fail for r in rec_results]
 
-            std_dev = statistics.stdev(combined) if len(combined) >= 2 else 0.0
+            # Use population stdev — we have ALL judges, not a sample
+            std_dev = (
+                statistics.pstdev(combined)
+                if len(combined) >= 2
+                else 0.0
+            )
             all_std_devs.append(std_dev)
             all_faith.extend(faiths)
             all_task.extend(tasks)
@@ -150,7 +118,7 @@ class CalibrationSummary:
         disagreements.sort(key=lambda d: d["std_dev"], reverse=True)
 
         # Judge-pair agreement: for each pair, what % of records agree on pass/fail?
-        judge_agreement = _compute_pair_agreement(results, disagreement_threshold=0.0)
+        judge_agreement = _compute_pair_agreement(results, judges)
 
         return cls(
             run_id=run_id,
@@ -161,9 +129,11 @@ class CalibrationSummary:
             median_std_dev=round(statistics.median(all_std_devs), 4) if all_std_devs else 0.0,
             mean_faithfulness=round(statistics.mean(all_faith), 4) if all_faith else 0.0,
             mean_task_completion=round(statistics.mean(all_task), 4) if all_task else 0.0,
-            pass_agreement_rate=round(
-                statistics.mean(all_pass_agree), 4
-            ) if all_pass_agree else 1.0,
+            pass_agreement_rate=(
+                round(statistics.mean(all_pass_agree), 4)
+                if all_pass_agree
+                else None
+            ),
             disagreements=disagreements,
             judge_agreement=judge_agreement,
         )
@@ -174,6 +144,9 @@ def compute_agreement_metrics(
     threshold: float = 0.7,
 ) -> dict[str, Any]:
     """Compute agreement metrics for a list of scores.
+
+    Uses population standard deviation (pstdev) since calibration
+    evaluates all available judges, not a sample.
 
     Args:
         scores: Combined scores from multiple judges for one record.
@@ -194,7 +167,12 @@ def compute_agreement_metrics(
             "fail_count": 0,
         }
 
-    std_dev = statistics.stdev(scores) if len(scores) >= 2 else 0.0
+    # Population stdev — all judges, not a sample
+    std_dev = (
+        statistics.pstdev(scores)
+        if len(scores) >= 2
+        else 0.0
+    )
     mean_score = statistics.mean(scores)
     min_score = min(scores)
     max_score = max(scores)
@@ -216,7 +194,7 @@ def compute_agreement_metrics(
 
 def _compute_pair_agreement(
     results: list[EvalResult],
-    disagreement_threshold: float = 0.0,
+    judges: list[str],
 ) -> dict[str, dict[str, float]]:
     """Compute pass/fail agreement rate between each pair of judges.
 
@@ -225,7 +203,7 @@ def _compute_pair_agreement(
 
     Args:
         results: All calibration results.
-        disagreement_threshold: Ignored here — always checks pass/fail.
+        judges: Ordered list of all judge model IDs (ensures consistent keys).
 
     Returns:
         Nested dict: {judge_a: {judge_b: agreement_rate}}.
@@ -235,9 +213,8 @@ def _compute_pair_agreement(
     for r in results:
         record_judges.setdefault(r.record_id, {})[r.judge_model] = r.pass_fail
 
-    judges = sorted({r.judge_model for r in results if r.judge_model})
+    # Use passed judges list for consistent key ordering
     agreement: dict[str, dict[str, float]] = {}
-
     for j1 in judges:
         agreement[j1] = {}
         for j2 in judges:
@@ -302,8 +279,7 @@ class CalibrationRunner:
         """Run calibration on ``records`` using all judges.
 
         Each record is evaluated through every judge independently.
-        The results are NOT stored in the DB (calibration is a separate
-        pipeline from normal evaluation).
+        Results are stored in the DB under the calibration run_id.
 
         Args:
             records: Records to evaluate.
@@ -333,7 +309,24 @@ class CalibrationRunner:
                 ),
             ))
 
-        run = EvalRun(run_id=run_id or str(_new_run_id()))
+        run_id = run_id or _new_id()
+        run = EvalRun(
+            run_id=run_id,
+            status=RunStatus.RUNNING,
+            record_count=len(records),
+            config={
+                "file": "<calibration>",
+                "format": "internal",
+                "judges": self.judges,
+                "pass_threshold": 0.7,
+            },
+            rubric_id="faithfulness-v1",
+            judge_model=",".join(self.judges),
+        )
+        self.db.insert_run(run)
+
+        # CRITICAL FIX: max_fallbacks = len(judges) - 1 so ALL judges are tried.
+        # The evaluator truncates to max(1, max_fallbacks + 1) judges.
         config = EvaluatorConfig(
             api_key=self.api_key,
             judges=self.judges,
@@ -343,37 +336,49 @@ class CalibrationRunner:
             rpm_limit=self.rpm_limit,
             use_cache=self.use_cache,
             pass_threshold=0.7,
-            max_fallbacks=0,  # calibration uses ALL judges, no fallback
+            max_fallbacks=len(self.judges) - 1,  # all judges
             no_fallback=False,
         )
 
         evaluator = LLMEvaluator(db=self.db, config=config)
         results = asyncio_run(evaluator.evaluate(run, records))
 
+        # Persist run completion
+        run.status = RunStatus.COMPLETED
         summary = CalibrationSummary.from_results(
             results, run.run_id, self.judges,
         )
+        run.mean_score = summary.mean_faithfulness
+        run.pass_rate = (
+            summary.pass_agreement_rate
+            if summary.pass_agreement_rate is not None
+            else 0.0
+        )
+        self.db.update_run(run)
+
         logger.info(
             "Calibration complete: %d records, %d judges, "
             "mean_std_dev=%.4f, pass_agreement=%.1f%%",
             summary.total_records,
             summary.total_judges,
             summary.mean_std_dev,
-            summary.pass_agreement_rate * 100,
+            (summary.pass_agreement_rate or 0.0) * 100,
         )
         return summary
 
 
-def _new_run_id() -> str:
-    """Return a fresh UUID4 string."""
-    import uuid
-    return str(uuid.uuid4())
-
-
 def asyncio_run(coro):
-    """Run an async coroutine (helper to avoid circular imports)."""
-    import asyncio
-    return asyncio.run(coro)
+    """Run an async coroutine, handling both fresh and nested event loops."""
+    try:
+        asyncio.get_running_loop()
+        # Already in a loop — create a new one
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+    except RuntimeError:
+        return asyncio.run(coro)
 
 
 # ── Rendering ────────────────────────────────────────────────────────────────
@@ -392,7 +397,7 @@ def render_calibration_summary(summary: CalibrationSummary) -> str:
         f"  Max std deviation:    {summary.max_std_dev:.4f}",
         f"  Mean faithfulness:    {summary.mean_faithfulness:.4f}",
         f"  Mean task completion: {summary.mean_task_completion:.4f}",
-        f"  Pass/fail agreement:  {summary.pass_agreement_rate:.1%}",
+        f"  Pass/fail agreement:  {(summary.pass_agreement_rate or 0.0):.1%}",
     ]
 
     if summary.disagreements:
@@ -424,6 +429,11 @@ def render_calibration_summary(summary: CalibrationSummary) -> str:
             lines.append(row)
 
     return "\n".join(lines)
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape codes from text."""
+    return re.sub(r'\x1b\[[0-9;]*m', '', text)
 
 
 def render_calibration_json(summary: CalibrationSummary) -> str:
