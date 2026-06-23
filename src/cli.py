@@ -28,6 +28,7 @@ from src.reporter import (
     print_table,
     render_table,
 )
+from src.rubric import RubricManager
 
 # Load environment variables from .env file
 # Check for custom env path via OPENROUTER_ENV_PATH, then fallback to default
@@ -405,5 +406,88 @@ def list_runs_cmd(
                 r.judge_model or "-",
             )
         console.print(table)
+    finally:
+        db.close()
+
+
+@app.command("rubric", help="Manage rubric templates.")
+def rubric_cmd(
+    list_templates: bool = typer.Option(False, "--list", help="List all rubric templates."),
+    show: str | None = typer.Option(None, "--show", help="Show a template by ID."),
+    create_name: str | None = typer.Option(None, "--create-name", help="Name for new template."),
+    create_file: Path | None = typer.Option(None, "--create-file", help="YAML file for new template."),
+    delete_id: str | None = typer.Option(None, "--delete", help="Delete a template by ID."),
+    json_out: bool = typer.Option(False, "--json"),
+    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db"),
+) -> None:
+    """Manage rubric templates."""
+    db = Database(db_path)
+    try:
+        manager = RubricManager(db)
+        if list_templates:
+            templates = manager.list_templates()
+            if json_out:
+                typer.echo(json.dumps([{"template_id": t.template_id, "name": t.name, "is_builtin": t.is_builtin, "created_at": t.created_at.isoformat() if t.created_at else None, "dimensions": [{"name": d.get("name"), "weight": d.get("weight")} for d in t.dimensions]} for t in templates], indent=2))
+                return
+            console = Console()
+            if not templates:
+                console.print("[yellow]no rubric templates found[/yellow]")
+                return
+            table = Table(title="Rubric Templates")
+            table.add_column("ID", style="cyan", no_wrap=True)
+            table.add_column("Name")
+            table.add_column("Built-in", justify="center")
+            table.add_column("Dimensions", justify="right")
+            table.add_column("Created", style="dim")
+            for t in templates:
+                table.add_row(
+                    t.template_id,
+                    t.name,
+                    "yes" if t.is_builtin else "no",
+                    str(len(t.dimensions)),
+                    t.created_at.strftime("%Y-%m-%d") if t.created_at else "-",
+                )
+            console.print(table)
+        elif show:
+            template = manager.get_template(show)
+            if template is None:
+                typer.echo(f"template not found: {show}", err=True)
+                raise typer.Exit(code=1)
+            assert template is not None
+            if json_out:
+                typer.echo(json.dumps({"template_id": template.template_id, "name": template.name, "yaml_content": template.yaml_content, "is_builtin": template.is_builtin, "dimensions": template.dimensions, "scoring": template.scoring}, indent=2))
+            else:
+                console = Console()
+                console.print(f"[bold]{template.name}[/bold] ({template.template_id})")
+                console.print(f"Built-in: {'yes' if template.is_builtin else 'no'}")
+                console.print(f"Dimensions: {len(template.dimensions)}")
+                console.print()
+                console.print(template.yaml_content)
+        elif create_name and create_file:
+            if not create_file.exists():
+                typer.echo(f"file not found: {create_file}", err=True)
+                raise typer.Exit(code=2)
+            yaml_content = create_file.read_text()
+            try:
+                t = manager.create_template(create_name, yaml_content)
+                console = Console()
+                console.print(f"[green]created template: {t.template_id}[/green]")
+            except ValueError as exc:
+                typer.echo(f"error: {exc}", err=True)
+                raise typer.Exit(code=1) from exc
+        elif delete_id:
+            try:
+                if manager.delete_template(delete_id):
+                    console = Console()
+                    console.print(f"[green]deleted template: {delete_id}[/green]")
+                else:
+                    typer.echo(f"template not found: {delete_id}", err=True)
+                    raise typer.Exit(code=1) from None
+            except ValueError as exc:
+                typer.echo(f"error: {exc}", err=True)
+                raise typer.Exit(code=1) from exc
+        else:
+            typer.echo("Use --list, --show <id>, --create-name <name> --create-file <path>, or --delete <id>", err=True)
+            raise typer.Exit(code=1) from None
     finally:
         db.close()
