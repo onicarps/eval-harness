@@ -9,13 +9,18 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
 import random
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from src.models import EvalRecord
+
+# Setup logging
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -62,7 +67,7 @@ def _row_after_since(row_ts: str | None, since: datetime | None) -> bool:
 
 
 def _make_record(
-    data: dict[str, object],
+    data: dict[str, Any],
     opts: IngestOptions,
     source_file: str | None,
 ) -> EvalRecord | None:
@@ -118,23 +123,29 @@ def ingest_jsonl(path: str | Path, options: IngestOptions | None = None) -> Iter
 
     def _gen() -> Iterator[EvalRecord]:
         with path.open("r", encoding="utf-8") as f:
-            for line in f:
+            for line_num, line in enumerate(f, start=1):
                 line = line.strip()
                 if not line:
+                    logger.debug("Skipping empty line %d in %s", line_num, path)
                     continue
                 try:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
+                    logger.debug("Skipping invalid JSON on line %d in %s", line_num, path)
                     continue
                 if not isinstance(obj, dict):
+                    logger.debug("Skipping non-object JSON on line %d in %s", line_num, path)
                     continue
                 ts = obj.get(opts.timestamp_col)
                 ts_str = ts if isinstance(ts, str) else None
                 if not _row_after_since(ts_str, since):
+                    logger.debug("Skipping line %d in %s (before since date)", line_num, path)
                     continue
                 rec = _make_record(obj, opts, source_file=str(path))
                 if rec is not None:
                     yield rec
+                else:
+                    logger.debug("Skipping line %d in %s (missing required fields)", line_num, path)
 
     yield from _apply_post_filters(_gen(), opts)
 
@@ -148,13 +159,41 @@ def ingest_csv(path: str | Path, options: IngestOptions | None = None) -> Iterat
     def _gen() -> Iterator[EvalRecord]:
         with path.open("r", encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
+            if reader.fieldnames is None:
+                logger.warning("CSV file %s has no header row", path)
+                return
+            # Validate that the required columns exist in the CSV header
+            header = set(reader.fieldnames)
+            missing_required = []
+            for col_name, label in [
+                (opts.input_col, "input"),
+                (opts.output_col, "output"),
+            ]:
+                if col_name not in header:
+                    missing_required.append(f"{label} ({col_name})")
+            if missing_required:
+                logger.warning(
+                    "CSV file %s is missing required columns: %s (available: %s)",
+                    path, ", ".join(missing_required), ", ".join(sorted(header)),
+                )
+                return
+            # Warn if the reference column is configured but absent
+            if opts.reference_col not in header:
+                logger.debug(
+                    "CSV file %s: reference column '%s' not found in header (available: %s); "
+                    "records will have no reference text",
+                    path, opts.reference_col, ", ".join(sorted(header)),
+                )
             for row in reader:
                 ts_val = row.get(opts.timestamp_col)
                 if not _row_after_since(ts_val, since):
+                    logger.debug("Skipping row in %s (before since date)", path)
                     continue
                 rec = _make_record(row, opts, source_file=str(path))
                 if rec is not None:
                     yield rec
+                else:
+                    logger.debug("Skipping row in %s (missing required fields)", path)
 
     yield from _apply_post_filters(_gen(), opts)
 
@@ -173,33 +212,42 @@ def ingest_stdin(
     since = _parse_since(opts.since)
 
     def _gen_jsonl() -> Iterator[EvalRecord]:
-        for line in stream:
+        for line_num, line in enumerate(stream, start=1):
             line = line.strip()
             if not line:
+                logger.debug("Skipping empty line %d from stdin", line_num)
                 continue
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
+                logger.debug("Skipping invalid JSON on line %d from stdin", line_num)
                 continue
             if not isinstance(obj, dict):
+                logger.debug("Skipping non-object JSON on line %d from stdin", line_num)
                 continue
             ts = obj.get(opts.timestamp_col)
             ts_str = ts if isinstance(ts, str) else None
             if not _row_after_since(ts_str, since):
+                logger.debug("Skipping line %d from stdin (before since date)", line_num)
                 continue
             rec = _make_record(obj, opts, source_file="<stdin>")
             if rec is not None:
                 yield rec
+            else:
+                logger.debug("Skipping line %d from stdin (missing required fields)", line_num)
 
     def _gen_csv() -> Iterator[EvalRecord]:
         reader = csv.DictReader(stream)
-        for row in reader:
+        for line_num, row in enumerate(reader, start=2):  # start at 2 to account for header
             ts_val = row.get(opts.timestamp_col)
             if not _row_after_since(ts_val, since):
+                logger.debug("Skipping row %d from stdin (before since date)", line_num)
                 continue
             rec = _make_record(row, opts, source_file="<stdin>")
             if rec is not None:
                 yield rec
+            else:
+                logger.debug("Skipping row %d from stdin (missing required fields)", line_num)
 
     if fmt == "jsonl":
         yield from _apply_post_filters(_gen_jsonl(), opts)

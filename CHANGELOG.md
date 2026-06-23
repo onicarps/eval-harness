@@ -27,6 +27,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced `evaluated_at or 0` sort key with a tz-aware `datetime` sentinel so
   the fallback path can never raise `TypeError` when ordering results.
 
+## [0.1.1] - 2026-06-23
+
+### Added
+- `list-runs` CLI command with Rich table output and `--json` flag.
+- `RubricTemplate` field validator ensuring `{input}`, `{output}`, `{reference}` placeholders are present.
+- CSV column validation: ingest now checks that configured columns exist in the CSV header and logs a clear warning if missing.
+- Per-line debug logging in `ingest_jsonl` and `ingest_csv` for skipped rows (empty lines, invalid JSON, missing fields, date filtering).
+- `_RateLimiter` now uses a bounded `deque` instead of an unbounded list.
+- Schema migration system: `_MIGRATIONS` dict with versioned incremental SQL diffs, replacing the monolithic `_SCHEMA_V1` list.
+- `CONTRIBUTING.md` with development setup, code quality guidelines, and PR workflow.
+- `mypy` type checking in CI and `[tool.mypy]` config in `pyproject.toml`.
+- `_setup_logging(verbose)` helper: `--verbose` flag now enables `DEBUG`-level log output.
+
+### Changed
+- `typer.confirm` default changed from `False` to `True` for the evaluation confirmation prompt (pressing Enter now proceeds instead of aborting).
+- `estimate_tokens` fallback heuristic changed from word count to `len(text) // 4` (roughly 4 chars per token).
+- `_FALLBACK_OBJ_RE` regex changed from greedy `.*` to non-greedy `.*?` to avoid over-matching long LLM reasoning paragraphs.
+- `PASS_THRESHOLD` constant documented with inline comment clarifying it is the default for `EvaluatorConfig`.
+- `combine_scores` docstring now documents the 50/50 weighting rationale.
+- `list_runs` DB query optimized from O(n) round-trips to a single query.
+
+### Fixed
+- Removed phantom `--config` CLI flag (declared but never parsed).
+- Fixed `__init__.py` version mismatch (`0.1.0` -> `0.1.1`).
+- Fixed `AGENTS.md` and `GENERATION_PROMPT.md` env var name: `openrouter_API_KEY` -> `OPENROUTER_API_KEY`.
+- Fixed duplicate `list_runs` method definition in `db.py`.
+
 ## [0.1.0] - 2026-05-29
 
 ### Added

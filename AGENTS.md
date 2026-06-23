@@ -113,7 +113,7 @@ Combined: 0.5 * faithfulness + 0.5 * task_completion. Pass/fail threshold: 0.7.
 Exit codes: 0=all pass, 1=any failures, 2=evaluator error
 
 ## API Key
-Read from openrouter_API_KEY env var (not hardcoded).
+Read from OPENROUTER_API_KEY env var (not hardcoded).
 
 ## Rules
 - TDD: write failing test BEFORE implementation

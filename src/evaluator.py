@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -34,7 +35,7 @@ from src.models import (
 )
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-PASS_THRESHOLD = 0.7
+PASS_THRESHOLD = 0.7  # Default for EvaluatorConfig; override via --pass-threshold
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ class EvaluatorConfig:
 
 
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
-_FALLBACK_OBJ_RE = re.compile(r"(\{.*\})", re.DOTALL)
+_FALLBACK_OBJ_RE = re.compile(r"(\{.*?\})", re.DOTALL)
 
 
 def extract_judge_json(content: str) -> dict[str, Any]:
@@ -105,7 +106,7 @@ def estimate_tokens(text: str) -> int:
         enc = tiktoken.get_encoding("cl100k_base")
         return len(enc.encode(text))
     except Exception:
-        return max(1, len(text.split()))
+        return max(1, len(text) // 4)
 
 
 def cache_key_for(
@@ -130,7 +131,13 @@ def cache_key_for(
 
 
 def combine_scores(faithfulness: float, task_completion: float) -> float:
-    """Compute combined score as a balanced average."""
+    """Compute combined score as a balanced 50/50 average.
+
+    The equal weighting reflects that both faithfulness (avoiding
+    hallucination) and task completion (satisfying the request) are
+    equally important for a quality response.  Phase 2 rubrics may
+    expose a configurable weighting.
+    """
     return 0.5 * float(faithfulness) + 0.5 * float(task_completion)
 
 
@@ -153,19 +160,21 @@ def _render_prompt(rubric: RubricTemplate, record: EvalRecord) -> str:
 
 
 class _RateLimiter:
-    """Simple async RPM rate limiter."""
+    """Simple async RPM rate limiter using a bounded deque."""
 
     def __init__(self, rpm: int | None) -> None:
         self.rpm = rpm
         self._lock = asyncio.Lock()
-        self._timestamps: list[float] = []
+        self._timestamps: deque[float] = deque(maxlen=rpm or 60)
 
     async def wait(self) -> None:
         if not self.rpm:
             return
         async with self._lock:
             now = time.monotonic()
-            self._timestamps = [t for t in self._timestamps if now - t < 60.0]
+            # Drop timestamps older than 60s
+            while self._timestamps and now - self._timestamps[0] >= 60.0:
+                self._timestamps.popleft()
             if len(self._timestamps) >= self.rpm:
                 sleep_for = 60.0 - (now - self._timestamps[0])
                 if sleep_for > 0:

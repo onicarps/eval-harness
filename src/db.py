@@ -28,77 +28,81 @@ CURRENT_SCHEMA_VERSION = 1
 # Setup logging
 logger = logging.getLogger(__name__)
 
-
-_SCHEMA_V1 = [
-    """
-    CREATE TABLE IF NOT EXISTS schema_version (
-        version INTEGER PRIMARY KEY,
-        applied_at TEXT NOT NULL
-    );
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS eval_runs (
-        run_id TEXT PRIMARY KEY,
-        created_at TEXT NOT NULL,
-        config_json TEXT NOT NULL,
-        record_count INTEGER DEFAULT 0,
-        rubric_id TEXT DEFAULT 'faithfulness-v1',
-        judge_model TEXT,
-        status TEXT DEFAULT 'running',
-        completed_at TEXT,
-        mean_score REAL,
-        pass_rate REAL,
-        eval_time_seconds REAL
-    );
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS eval_records (
-        record_id TEXT PRIMARY KEY,
-        run_id TEXT NOT NULL REFERENCES eval_runs(run_id),
-        input_text TEXT NOT NULL,
-        output_text TEXT NOT NULL,
-        reference_text TEXT,
-        source_file TEXT,
-        metadata_json TEXT,
-        created_at TEXT NOT NULL
-    );
-    """,
-    "CREATE INDEX IF NOT EXISTS idx_records_run ON eval_records(run_id);",
-    """
-    CREATE TABLE IF NOT EXISTS eval_results (
-        result_id TEXT PRIMARY KEY,
-        record_id TEXT NOT NULL REFERENCES eval_records(record_id),
-        run_id TEXT NOT NULL REFERENCES eval_runs(run_id),
-        rubric_id TEXT DEFAULT 'faithfulness-v1',
-        rubric_version TEXT DEFAULT '1.0',
-        faithfulness REAL NOT NULL,
-        task_completion REAL NOT NULL,
-        combined_score REAL NOT NULL,
-        pass_fail TEXT NOT NULL,
-        reasoning TEXT DEFAULT '',
-        faithfulness_reasoning TEXT DEFAULT '',
-        task_completion_reasoning TEXT DEFAULT '',
-        judge_model TEXT NOT NULL,
-        judge_fallbacks INTEGER DEFAULT 0,
-        judge_tried TEXT DEFAULT '[]',
-        tokens_estimated INTEGER,
-        evaluated_at TEXT NOT NULL,
-        error TEXT
-    );
-    """,
-    "CREATE INDEX IF NOT EXISTS idx_results_run ON eval_results(run_id);",
-    "CREATE INDEX IF NOT EXISTS idx_results_record ON eval_results(record_id);",
-    """
-    CREATE TABLE IF NOT EXISTS judge_cache (
-        cache_key TEXT PRIMARY KEY,
-        model_id TEXT NOT NULL,
-        rubric_version TEXT NOT NULL,
-        response_json TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        hits INTEGER DEFAULT 1
-    );
-    """,
-]
+# Incremented schema migrations.  Each key is a version number, each value is a
+# list of SQL statements to apply when upgrading *to* that version.
+# _migrate() walks from the current version+1 up to CURRENT_SCHEMA_VERSION.
+_MIGRATIONS: dict[int, list[str]] = {
+    1: [
+        """
+        CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS eval_runs (
+            run_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            config_json TEXT NOT NULL,
+            record_count INTEGER DEFAULT 0,
+            rubric_id TEXT DEFAULT 'faithfulness-v1',
+            judge_model TEXT,
+            status TEXT DEFAULT 'running',
+            completed_at TEXT,
+            mean_score REAL,
+            pass_rate REAL,
+            eval_time_seconds REAL
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS eval_records (
+            record_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL REFERENCES eval_runs(run_id),
+            input_text TEXT NOT NULL,
+            output_text TEXT NOT NULL,
+            reference_text TEXT,
+            source_file TEXT,
+            metadata_json TEXT,
+            created_at TEXT NOT NULL
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_records_run ON eval_records(run_id);",
+        """
+        CREATE TABLE IF NOT EXISTS eval_results (
+            result_id TEXT PRIMARY KEY,
+            record_id TEXT NOT NULL REFERENCES eval_records(record_id),
+            run_id TEXT NOT NULL REFERENCES eval_runs(run_id),
+            rubric_id TEXT DEFAULT 'faithfulness-v1',
+            rubric_version TEXT DEFAULT '1.0',
+            faithfulness REAL NOT NULL,
+            task_completion REAL NOT NULL,
+            combined_score REAL NOT NULL,
+            pass_fail TEXT NOT NULL,
+            reasoning TEXT DEFAULT '',
+            faithfulness_reasoning TEXT DEFAULT '',
+            task_completion_reasoning TEXT DEFAULT '',
+            judge_model TEXT NOT NULL,
+            judge_fallbacks INTEGER DEFAULT 0,
+            judge_tried TEXT DEFAULT '[]',
+            tokens_estimated INTEGER,
+            evaluated_at TEXT NOT NULL,
+            error TEXT
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_results_run ON eval_results(run_id);",
+        "CREATE INDEX IF NOT EXISTS idx_results_record ON eval_results(record_id);",
+        """
+        CREATE TABLE IF NOT EXISTS judge_cache (
+            cache_key TEXT PRIMARY KEY,
+            model_id TEXT NOT NULL,
+            rubric_version TEXT NOT NULL,
+            response_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            hits INTEGER DEFAULT 1
+        );
+        """,
+    ],
+}
 
 
 def _iso(dt: datetime | None) -> str | None:
@@ -129,24 +133,48 @@ class Database:
         self._migrate()
 
     def _migrate(self) -> None:
-        """Apply all pending schema migrations idempotently."""
+        """Apply all pending schema migrations idempotently.
+
+        Walks from the current stored version up to CURRENT_SCHEMA_VERSION,
+        applying each version's migration SQL in order.  Each version's
+        statements are wrapped in a transaction so partial upgrades are
+        rolled back on error.
+        """
         logger.debug("Starting database migration")
         cur = self.connection.cursor()
-        for i, stmt in enumerate(_SCHEMA_V1):
-            logger.debug("Executing migration statement %d", i + 1)
-            cur.execute(stmt)
+
+        # Bootstrap: ensure schema_version table exists before reading it
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS schema_version ("
+            "  version INTEGER PRIMARY KEY,"
+            "  applied_at TEXT NOT NULL"
+            ");"
+        )
+        self.connection.commit()
+
         cur.execute("SELECT MAX(version) FROM schema_version;")
         row = cur.fetchone()
         current = row[0] if row and row[0] is not None else 0
-        if current < CURRENT_SCHEMA_VERSION:
-            logger.info("Migrating database from version %d to %d", current, CURRENT_SCHEMA_VERSION)
+
+        for version in range(current + 1, CURRENT_SCHEMA_VERSION + 1):
+            stmts = _MIGRATIONS.get(version)
+            if stmts is None:
+                raise RuntimeError(
+                    f"no migration defined for schema version {version}"
+                )
+            logger.info("Migrating database to version %d", version)
+            for i, stmt in enumerate(stmts):
+                logger.debug("  migration %d/%d: %s", i + 1, len(stmts), stmt.strip()[:80])
+                cur.execute(stmt)
             cur.execute(
                 "INSERT INTO schema_version (version, applied_at) VALUES (?, ?);",
-                (CURRENT_SCHEMA_VERSION, datetime.now(UTC).isoformat()),
+                (version, datetime.now(UTC).isoformat()),
             )
-        else:
-            logger.debug("Database is already at version %d", current)
-        self.connection.commit()
+            self.connection.commit()
+            logger.info("Migration to version %d complete", version)
+
+        if current >= CURRENT_SCHEMA_VERSION:
+            logger.debug("Database is already at version %d (latest: %d)", current, CURRENT_SCHEMA_VERSION)
         logger.debug("Database migration completed")
 
     def close(self) -> None:

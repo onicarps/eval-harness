@@ -26,6 +26,9 @@ jobs:
         run: |
           ruff check src tests
           ruff format --check src tests
+      - name: Type Check
+        run: |
+          mypy --config-file pyproject.toml src
       - name: Test
         run: |
           pytest tests/ -v --cov=src --cov-report=term-missing

@@ -39,6 +39,16 @@ else:
 # Setup logging
 logger = logging.getLogger(__name__)
 
+
+def _setup_logging(verbose: bool) -> None:
+    """Configure root logger level based on --verbose flag."""
+    level = logging.DEBUG if verbose else logging.WARNING
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
 DEFAULT_DB_PATH = Path.home() / ".eval-harness" / "eval.db"
 
 app = typer.Typer(
@@ -91,11 +101,11 @@ def run_cmd(
     yes: bool = typer.Option(False, "--yes"),
     verbose: bool = typer.Option(False, "--verbose"),
     quiet: bool = typer.Option(False, "--quiet"),
-    config: Path | None = typer.Option(None, "--config"),
     db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db"),
     judges_cache: Path | None = typer.Option(None, "--judges-cache"),
 ) -> None:
     """Run ingest + evaluation pipeline."""
+    _setup_logging(verbose)
     console = Console(quiet=quiet)
     options = IngestOptions(
         input_col=input_col,
