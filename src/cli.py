@@ -30,6 +30,12 @@ from src.reporter import (
     render_table,
 )
 from src.rubric import RubricManager
+from src.calibrate import (
+    CalibrationRunner,
+    CalibrationSummary,
+    render_calibration_json,
+    render_calibration_summary,
+)
 from src.trend import MIN_RUNS_DISPLAY, compute_trends
 
 # Load environment variables from .env file
@@ -590,6 +596,82 @@ def trend_cmd(
                 regression_marker,
             )
         console.print(table)
+    finally:
+        db.close()
+
+
+@app.command("calibrate", help="Measure inter-judge agreement on a dataset.")
+def calibrate_cmd(
+    file: Path = typer.Argument(..., help="Input file path (use '-' for stdin)."),
+    format: str = typer.Option("jsonl", "--format", help="jsonl or csv"),
+    input_col: str = typer.Option("input", "--input-col"),
+    output_col: str = typer.Option("output", "--output-col"),
+    reference_col: str = typer.Option("reference", "--reference-col"),
+    sample: int | None = typer.Option(None, "--sample"),
+    since: str | None = typer.Option(None, "--since"),
+    limit: int | None = typer.Option(None, "--limit"),
+    output_file: Path | None = typer.Option(None, "--output-file"),
+    json_out: bool = typer.Option(False, "--json"),
+    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db"),
+    judges_cache: Path | None = typer.Option(None, "--judges-cache"),
+) -> None:
+    """Run all records through every judge and report disagreement."""
+    console = Console()
+    options = IngestOptions(
+        input_col=input_col,
+        output_col=output_col,
+        reference_col=reference_col,
+        sample=sample,
+        since=since,
+        limit=limit,
+    )
+    if str(file) == "-":
+        import io
+        records = list(ingest_stdin(cast(io.TextIOBase, sys.stdin), fmt=format, options=options))
+    else:
+        if not file.exists():
+            console.print(f"[red]file not found: {file}[/red]")
+            raise typer.Exit(code=2)
+        records = list(ingest_file(file, fmt=format, options=options))
+
+    if not records:
+        console.print("[yellow]no records to calibrate[/yellow]")
+        raise typer.Exit(code=2)
+
+    api_key = _get_api_key()
+    if not api_key:
+        console.print("[red]OPENROUTER_API_KEY is not set. Aborting.[/red]")
+        raise typer.Exit(code=2)
+
+    registry = JudgeRegistry(cache_path=judges_cache) if judges_cache else JudgeRegistry()
+    judge_models = [m.id for m in registry.list()]
+    if not judge_models:
+        console.print("[red]no judges available[/red]")
+        raise typer.Exit(code=2)
+
+    db = Database(db_path)
+    try:
+        runner = CalibrationRunner(
+            db=db,
+            api_key=api_key,
+            judges=judge_models,
+        )
+
+        summary = runner.run(records)
+
+        if json_out:
+            text = render_calibration_json(summary)
+            if output_file:
+                Path(output_file).write_text(text)
+            else:
+                console.print(text)
+        else:
+            text = render_calibration_summary(summary)
+            if output_file:
+                Path(output_file).write_text(text)
+            else:
+                console.print(text)
+
     finally:
         db.close()
 
