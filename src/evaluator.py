@@ -345,7 +345,12 @@ class LLMEvaluator:
             ],
             "temperature": 0.0,
         }
-        resp = await client.post(OPENROUTER_URL, headers=headers, json=payload)
+        resp = await client.post(
+            OPENROUTER_URL,
+            headers=headers,
+            json=payload,
+            timeout=httpx.Timeout(self.config.timeout, connect=10.0),
+        )
         logger.debug("OpenRouter API response status: %d", resp.status_code)
         if resp.status_code >= 400:
             logger.error("OpenRouter API HTTP error: %d", resp.status_code)

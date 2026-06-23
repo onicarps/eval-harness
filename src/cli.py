@@ -59,6 +59,14 @@ app = typer.Typer(
 )
 
 
+@app.callback()
+def _global_opts(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Global options for all eval-harness commands."""
+    _setup_logging(verbose)
+
+
 def _get_api_key() -> str:
     """Return the OPENROUTER_API_KEY env value or empty string."""
     return os.environ.get("OPENROUTER_API_KEY", "")
@@ -99,13 +107,11 @@ def run_cmd(
     timeout: float = typer.Option(60.0, "--timeout"),
     rpm_limit: int | None = typer.Option(None, "--rpm-limit"),
     yes: bool = typer.Option(False, "--yes"),
-    verbose: bool = typer.Option(False, "--verbose"),
     quiet: bool = typer.Option(False, "--quiet"),
     db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db"),
     judges_cache: Path | None = typer.Option(None, "--judges-cache"),
 ) -> None:
     """Run ingest + evaluation pipeline."""
-    _setup_logging(verbose)
     console = Console(quiet=quiet)
     options = IngestOptions(
         input_col=input_col,
@@ -150,7 +156,7 @@ def run_cmd(
     if not yes and not quiet:
         if not typer.confirm(
             f"Will evaluate {len(records)} record(s). Continue?",
-            default=False,
+            default=True,
         ):
             console.print("[yellow]aborted by user[/yellow]")
             logger.info("User aborted evaluation")
@@ -207,7 +213,9 @@ def run_cmd(
         if len(records) > 10 and not quiet:
 
             def progress_cb(done: int, total: int) -> None:
-                if done == total or done % max(1, total // 20) == 0:
+                # Print at most 20 updates: at completion and evenly spaced
+                step = max(1, total // 20)
+                if done == total or done % step == 0:
                     console.print(f"[dim]progress: {done}/{total}[/dim]")
                     logger.debug("Evaluation progress: %d/%d", done, total)
 
