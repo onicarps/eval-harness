@@ -36,6 +36,8 @@ from src.calibrate import (
     render_calibration_json,
     render_calibration_summary,
 )
+from src.gate import CheckGateResult, GateRunner
+from src.rubric import RubricTemplate
 from src.trend import MIN_RUNS_DISPLAY, compute_trends
 
 # Load environment variables from .env file
@@ -672,6 +674,62 @@ def calibrate_cmd(
             else:
                 console.print(text)
 
+    finally:
+        db.close()
+
+
+@app.command("gate", help="CI/CD quality gate — check if a run meets a threshold.")
+def gate_cmd(
+    run_id: str | None = typer.Option(None, "--run-id", help="Run ID to check against threshold."),
+    threshold: float = typer.Option(0.7, "--threshold", help="Pass rate threshold (0.0–1.0)."),
+    suggest_baseline: bool = typer.Option(False, "--suggest-baseline", help="Analyze history and suggest a baseline."),
+    json_out: bool = typer.Option(False, "--json", help="Output result as JSON."),
+    output_file: Path | None = typer.Option(None, "--output-file", help="Write output to file."),
+    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db"),
+) -> None:
+    """CI/CD quality gate — check if a run meets a threshold, or suggest one from history."""
+    db = Database(db_path)
+    try:
+        if suggest_baseline:
+            runner = GateRunner(db)
+            suggestion = runner.suggest_baseline()
+            if suggestion is None:
+                typer.echo("no completed runs found to suggest baseline from", err=True)
+                raise typer.Exit(code=2) from None
+            if json_out:
+                typer.echo(json.dumps(suggestion, indent=2))
+            else:
+                console = Console()
+                console.print("[bold]Suggested Baseline[/bold]")
+                console.print(f"  Recommended: {suggestion['recommended_baseline']:.1%}")
+                console.print(f"  Median pass rate: {suggestion['median_pass_rate']:.1%}")
+                console.print(f"  Runs analyzed: {suggestion['runs_analyzed']}")
+                console.print(f"  Range: {suggestion['min_pass_rate']:.1%} – {suggestion['max_pass_rate']:.1%}")
+                if suggestion.get("note"):
+                    console.print(f"  [dim]{suggestion['note']}[/dim]")
+            return
+
+        if run_id is None:
+            typer.echo("use --run-id <id> to check a run, or --suggest-baseline", err=True)
+            raise typer.Exit(code=2) from None
+
+        runner = GateRunner(db)
+        result = runner.check(run_id, threshold=threshold)
+
+        if json_out:
+            text = result.to_json()
+        else:
+            text = result.to_text()
+
+        if output_file:
+            Path(output_file).write_text(text)
+        else:
+            typer.echo(text)
+
+        raise typer.Exit(code=result.exit_code) from None
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2) from None
     finally:
         db.close()
 
