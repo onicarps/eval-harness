@@ -227,7 +227,7 @@ class Database:
             logger.debug("Database is already at version %d (latest: %d)", current, CURRENT_SCHEMA_VERSION)
         logger.debug("Database migration completed")
 
-    def _seed_rubic_templates(self, cur: sqlite3.Cursor) -> None:
+    def _seed_rubric_templates(self, cur: sqlite3.Cursor) -> None:
         """Seed the rubric_templates table with 5 built-in templates if empty."""
         cur.execute("SELECT COUNT(*) FROM rubric_templates;")
         if cur.fetchone()[0] > 0:
