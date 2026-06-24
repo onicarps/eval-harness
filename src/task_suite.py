@@ -263,11 +263,63 @@ _MULTI_STEP_SUITE = {
     ],
 }
 
+_LLM_JUDGE_SUITE = {
+    "suite_id": "llm-judge-v1",
+    "name": "LLM Judge Tests",
+    "description": "Open-ended tasks that require LLM judge scoring (faithfulness and task completion).",
+    "steps": [
+        {
+            "id": "lj-1",
+            "prompt": "Explain quantum computing in one sentence.",
+            "expected_output": (
+                "Quantum computing uses quantum mechanical phenomena "
+                "like superposition and entanglement to perform computation."
+            ),
+            "step_type": "echo",
+        },
+        {
+            "id": "lj-2",
+            "prompt": "Write a haiku about machine learning.",
+            "expected_output": (
+                "An AI model learns patterns from data to make predictions."
+            ),
+            "step_type": "echo",
+        },
+        {
+            "id": "lj-3",
+            "prompt": "Summarize the benefits of exercise.",
+            "expected_output": (
+                "Exercise improves cardiovascular health, strengthens muscles, "
+                "and boosts mental well-being."
+            ),
+            "step_type": "echo",
+        },
+        {
+            "id": "lj-4",
+            "prompt": "What is the meaning of life?",
+            "expected_output": (
+                "The meaning of life is a philosophical question about "
+                "purpose and significance."
+            ),
+            "step_type": "echo",
+        },
+        {
+            "id": "lj-5",
+            "prompt": "Describe a sunset to someone who has never seen one.",
+            "expected_output": (
+                "A sunset is the sun disappearing below the horizon, "
+                "painting the sky in warm colors."
+            ),
+            "step_type": "echo",
+        },
+    ],
+}
+
 # ── BuiltinSuiteRegistry ────────────────────────────────────────────────────────
 
 
 class BuiltinSuiteRegistry:
-    """Provides access to the 5 built-in task suites.
+    """Provides access to the 6 built-in task suites.
 
     The built-in suites are lazily loaded on first access.
     """
@@ -284,6 +336,7 @@ class BuiltinSuiteRegistry:
                 _FILE_READ_SUITE,
                 _STRING_REVERSAL_SUITE,
                 _MULTI_STEP_SUITE,
+                _LLM_JUDGE_SUITE,
             ]:
                 suite = load_suite_from_dict(suite_data)
                 cls._cache[suite.suite_id] = suite

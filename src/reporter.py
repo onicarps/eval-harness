@@ -216,3 +216,75 @@ def export_results(
     else:
         raise ValueError(f"unsupported export format: {fmt}")
     return out_path
+
+
+def export_agent_results(
+    run: object, results: list[object], out_path: str | Path, fmt: str = "json"
+) -> Path:
+    """Export agent run results to JSON or CSV.
+
+    Args:
+        run: The AgentRun model (must have run_id, suite_id, agent_type, status).
+        results: Iterable of AgentResult.
+        out_path: Destination file path.
+        fmt: 'json' or 'csv'.
+
+    Returns:
+        The output path written.
+    """
+    out_path = Path(out_path)
+    if fmt == "json":
+        payload = {
+            "run": {
+                "run_id": getattr(run, "run_id", ""),
+                "suite_id": getattr(run, "suite_id", ""),
+                "agent_type": getattr(run, "agent_type", ""),
+                "status": str(getattr(run, "status", "")),
+                "config": getattr(run, "config", {}),
+            },
+            "results": [
+                {
+                    "step_id": getattr(r, "step_id", ""),
+                    "agent_output": getattr(r, "agent_output", ""),
+                    "success": getattr(r, "success", False),
+                    "score": getattr(r, "score", 0.0),
+                    "error": getattr(r, "error", None),
+                    "duration_seconds": getattr(r, "duration_seconds", 0.0),
+                    "tokens_used": getattr(r, "tokens_used", None),
+                }
+                for r in results
+            ],
+        }
+        out_path.write_text(json.dumps(payload, indent=2, default=str))
+    elif fmt == "csv":
+        fields = [
+            "step_id",
+            "run_id",
+            "agent_type",
+            "agent_output",
+            "success",
+            "score",
+            "error",
+            "duration_seconds",
+            "tokens_used",
+        ]
+        with out_path.open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fields)
+            w.writeheader()
+            for r in results:
+                w.writerow(
+                    {
+                        "step_id": getattr(r, "step_id", ""),
+                        "run_id": getattr(run, "run_id", ""),
+                        "agent_type": getattr(run, "agent_type", ""),
+                        "agent_output": getattr(r, "agent_output", ""),
+                        "success": getattr(r, "success", False),
+                        "score": getattr(r, "score", 0.0),
+                        "error": getattr(r, "error", "") or "",
+                        "duration_seconds": getattr(r, "duration_seconds", 0.0),
+                        "tokens_used": getattr(r, "tokens_used", "") or "",
+                    }
+                )
+    else:
+        raise ValueError(f"unsupported export format: {fmt}")
+    return out_path

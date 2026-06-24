@@ -1385,5 +1385,157 @@ def agent_list_suites_cmd(
         console.print(table)
 
 
+@app.command(
+    "agent-report",
+    help="Display results from a previously stored agent evaluation run.",
+    epilog="Example: eval-harness agent-report --run-id <RUN_ID> --output json",
+)
+def agent_report_cmd(
+    run_id: str = typer.Option(
+        ...,
+        "--run-id",
+        help="The unique ID of the agent evaluation run to display.",
+    ),
+    output: str = typer.Option(
+        "table",
+        "--output",
+        help="Output format: 'table' (rich terminal), 'json', or 'csv'.",
+    ),
+    output_file: Path | None = typer.Option(
+        None,
+        "--output-file",
+        help="Write the report to a file instead of printing to stdout.",
+    ),
+    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db", help="Path to the SQLite database."),
+) -> None:
+    """Display a previously stored agent run.
+
+    Retrieves a completed agent evaluation run from the database and displays
+    its summary, including per-step scores, pass/fail counts, and timing information.
+    """
+    db = Database(db_path)
+    try:
+        run = db.get_agent_run(run_id)
+        if run is None:
+            typer.echo(f"run not found: {run_id}", err=True)
+            raise typer.Exit(code=1)
+        results = db.get_agent_results(run_id)
+
+        if output == "json":
+            payload = {
+                "run_id": run.run_id,
+                "suite_id": run.suite_id,
+                "agent_type": run.agent_type,
+                "status": run.status,
+                "config": run.config,
+                "results": [
+                    {
+                        "step_id": r.step_id,
+                        "agent_output": r.agent_output,
+                        "success": r.success,
+                        "score": r.score,
+                        "error": r.error,
+                        "duration_seconds": r.duration_seconds,
+                        "tokens_used": r.tokens_used,
+                    }
+                    for r in results
+                ],
+            }
+            text = json.dumps(payload, indent=2, default=str)
+        elif output == "csv":
+            from src.reporter import export_agent_results
+            if output_file is None:
+                output_file = Path(f"{run_id}-agent.csv")
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            export_agent_results(run, results, output_file, fmt="csv")
+            typer.echo(f"wrote {output_file}")
+            return
+        else:
+            from rich.table import Table
+            buf = io.StringIO()
+            console = Console(file=buf, force_terminal=False, width=100)
+            console.print(f"[bold]Agent Run: {run.run_id}[/bold]")
+            console.print(f"  Suite: {run.suite_id}")
+            console.print(f"  Agent: {run.agent_type}")
+            console.print(f"  Status: {run.status}")
+            console.print(f"  Steps: {len(results)}")
+            if results:
+                passed = sum(1 for r in results if r.success)
+                mean_score = sum(r.score for r in results) / len(results)
+                console.print(f"  Passed: {passed}/{len(results)}")
+                console.print(f"  Mean Score: {mean_score:.3f}")
+            console.print()
+
+            table = Table(title="Step Results")
+            table.add_column("Step", style="cyan")
+            table.add_column("Success", justify="center")
+            table.add_column("Score", justify="right")
+            table.add_column("Error", style="red")
+            for r in results:
+                success_str = "✓" if r.success else "✗"
+                score_str = f"{r.score:.2f}"
+                error_str = r.error or ""
+                table.add_row(r.step_id, success_str, score_str, error_str)
+            console.print(table)
+
+            text = buf.getvalue()
+            if output_file:
+                Path(output_file).parent.mkdir(parents=True, exist_ok=True)
+                Path(output_file).write_text(text)
+            else:
+                typer.echo(text)
+            return
+
+        if output_file:
+            Path(output_file).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_file).write_text(text)
+        else:
+            typer.echo(text)
+    finally:
+        db.close()
+
+
+@app.command(
+    "agent-export",
+    help="Export an agent run's full results to JSON or CSV.",
+    epilog="Example: eval-harness agent-export --run-id <RUN_ID> --format json --output-file results.json",
+)
+def agent_export_cmd(
+    run_id: str = typer.Option(
+        ...,
+        "--run-id",
+        help="The unique ID of the agent evaluation run to export.",
+    ),
+    format: str = typer.Option(
+        "json",
+        "--format",
+        help="Export format: 'json' (full structured data) or 'csv' (flat table).",
+    ),
+    output_file: Path = typer.Option(
+        ...,
+        "--output-file",
+        help="Path to write the exported file.",
+    ),
+    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db", help="Path to the SQLite database."),
+) -> None:
+    """Export an agent run's full payload.
+
+    Exports all step results from a completed agent run to a file.
+    JSON export includes full per-step detail; CSV export is a flat table
+    suitable for spreadsheets or further analysis.
+    """
+    db = Database(db_path)
+    try:
+        run = db.get_agent_run(run_id)
+        if run is None:
+            typer.echo(f"run not found: {run_id}", err=True)
+            raise typer.Exit(code=1)
+        Path(output_file).parent.mkdir(parents=True, exist_ok=True)
+        db.export_agent_run(run_id, output_file, fmt=format)
+        typer.echo(f"wrote {output_file}")
+    finally:
+        db.close()
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()

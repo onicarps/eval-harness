@@ -132,8 +132,8 @@ class TestMigrationV4:
         )
         db.insert_agent_task_suite(suite)
         suites = db.list_agent_task_suites()
-        # 5 built-in + 1 custom = 6
-        assert len(suites) == 6
+        # 6 built-in + 1 custom = 7
+        assert len(suites) == 7
         custom = [s for s in suites if s.suite_id == "custom-v1"]
         assert len(custom) == 1
         assert custom[0].name == "Custom Suite"

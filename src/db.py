@@ -915,6 +915,84 @@ class Database:
             )
         return out
 
+    def export_agent_run(self, run_id: str, out_path: str | Path, fmt: str = "json") -> Path:
+        """Export an agent run's results to JSON or CSV.
+
+        Args:
+            run_id: The agent run identifier to export.
+            out_path: Destination file path.
+            fmt: 'json' or 'csv'.
+
+        Returns:
+            The output path written.
+
+        Raises:
+            ValueError: If the run is not found or format is unsupported.
+        """
+        out_path = Path(out_path)
+        run = self.get_agent_run(run_id)
+        if run is None:
+            raise ValueError(f"run not found: {run_id}")
+        results = self.get_agent_results(run_id)
+
+        if fmt == "json":
+            payload = {
+                "run": {
+                    "run_id": run.run_id,
+                    "suite_id": run.suite_id,
+                    "agent_type": run.agent_type,
+                    "status": str(run.status),
+                    "config": run.config,
+                    "created_at": _iso(run.created_at),
+                    "completed_at": _iso(run.completed_at),
+                },
+                "results": [
+                    {
+                        "step_id": r.step_id,
+                        "agent_output": r.agent_output,
+                        "success": r.success,
+                        "score": r.score,
+                        "error": r.error,
+                        "duration_seconds": r.duration_seconds,
+                        "tokens_used": r.tokens_used,
+                    }
+                    for r in results
+                ],
+            }
+            out_path.write_text(json.dumps(payload, indent=2, default=str))
+        elif fmt == "csv":
+            fields = [
+                "step_id",
+                "run_id",
+                "agent_type",
+                "agent_output",
+                "success",
+                "score",
+                "error",
+                "duration_seconds",
+                "tokens_used",
+            ]
+            with out_path.open("w", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=fields)
+                w.writeheader()
+                for r in results:
+                    w.writerow(
+                        {
+                            "step_id": r.step_id,
+                            "run_id": run.run_id,
+                            "agent_type": run.agent_type,
+                            "agent_output": r.agent_output,
+                            "success": r.success,
+                            "score": r.score,
+                            "error": r.error or "",
+                            "duration_seconds": r.duration_seconds,
+                            "tokens_used": r.tokens_used or "",
+                        }
+                    )
+        else:
+            raise ValueError(f"unsupported export format: {fmt}")
+        return out_path
+
     def insert_agent_task_suite(self, suite: TaskSuiteRow) -> None:
         """Insert an agent task suite."""
         now = datetime.now(UTC).isoformat()

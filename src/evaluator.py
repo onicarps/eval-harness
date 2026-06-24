@@ -531,6 +531,84 @@ class LLMEvaluator:
             logger.warning("Feedback generation failed for record %s: %s", record.record_id, exc)
             return None
 
+    async def score_step(
+        self, step: Any, agent_output: str | None = None
+    ) -> Any:
+        """Score a single agent step output using the LLM judge.
+
+        This is a convenience wrapper for scoring agent evaluation steps
+        where we don't have a full EvalRecord. It constructs a temporary
+        EvalRecord from the step data and runs the judge once.
+
+        Args:
+            step: The TaskStep that was executed.
+            agent_output: The agent's output. If None, uses an empty string.
+
+        Returns:
+            An AgentResult with the judge's score.
+        """
+        from src.agent_models import AgentResult as AgentResultType
+
+        output = agent_output if agent_output is not None else ""
+        record = EvalRecord(
+            input_text=step.prompt,
+            output_text=output,
+            reference_text=step.expected_output or None,
+        )
+
+        prompt = _render_prompt(self.config.rubric, record)
+        tried: list[str] = []
+        last_error: str | None = None
+        judges = list(self.config.judges[: max(1, self.config.max_fallbacks + 1)])
+
+        async with httpx.AsyncClient(timeout=self.config.timeout) as client:
+            for judge in judges:
+                tried.append(judge)
+                key = cache_key_for(
+                    judge,
+                    self.config.rubric.version,
+                    record.input_text,
+                    record.output_text,
+                    record.reference_text,
+                )
+                cached = self.db.get_cache(key) if self.config.use_cache else None
+                if cached is not None:
+                    data = cached.response
+                else:
+                    try:
+                        data = await self._call_judge(client, judge, prompt)
+                    except Exception as exc:
+                        last_error = f"{judge}: {exc}"
+                        continue
+                    if self.config.use_cache:
+                        self.db.put_cache(
+                            JudgeCacheEntry(
+                                cache_key=key,
+                                model_id=judge,
+                                rubric_version=self.config.rubric.version,
+                                response=data,
+                            )
+                        )
+                faith = float(data.get("faithfulness", 0.0))
+                task = float(data.get("task_completion", 0.0))
+                faith = max(0.0, min(1.0, faith))
+                task = max(0.0, min(1.0, task))
+                combined = combine_scores(faith, task)
+                return AgentResultType(
+                    step_id=step.id,
+                    agent_output=output,
+                    success=True,
+                    score=round(combined, 4),
+                )
+
+        return AgentResultType(
+            step_id=step.id,
+            agent_output=output,
+            success=False,
+            score=0.0,
+            error=last_error or "no judges available",
+        )
+
     def _build_result(
         self,
         record: EvalRecord,

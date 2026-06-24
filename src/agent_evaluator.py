@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from typing import Any
 
 from src.agent import Agent
 from src.agent_models import (
@@ -32,13 +33,21 @@ class EvaluatorConfig:
         pass_threshold: Score threshold for a step to count as "passed".
         max_steps_per_run: Maximum number of steps to execute per run.
         timeout_seconds: Overall timeout for the entire run.
-        scoring_method: Scoring method ('exact_match' or 'trajectory').
+        scoring_method: Scoring method. One of 'exact_match' (default),
+            'trajectory', or 'llm_judge'. When 'llm_judge' is selected,
+            an LLMEvaluator is used to score open-ended agent outputs.
+        judge_api_key: API key for the LLM judge (required when
+            scoring_method='llm_judge').
+        judge_models: List of judge model IDs for LLM judge scoring
+            (defaults to a single mock model for testing).
     """
 
     pass_threshold: float = 0.7
     max_steps_per_run: int = 50
     timeout_seconds: float = 60.0
     scoring_method: str = "exact_match"
+    judge_api_key: str | None = None
+    judge_models: list[str] | None = None
 
 
 class AgentEvaluator:
@@ -58,6 +67,41 @@ class AgentEvaluator:
             config: Optional configuration. Uses defaults if not provided.
         """
         self.config = config or EvaluatorConfig()
+        self._judge_evaluator = None
+
+    def _get_judge_evaluator(self) -> Any:
+        """Lazily create and return the LLMEvaluator for llm_judge scoring.
+
+        Returns:
+            An LLMEvaluator instance.
+
+        Raises:
+            ValueError: If scoring_method is not 'llm_judge' or if
+                required configuration is missing.
+        """
+        if self.config.scoring_method != "llm_judge":
+            raise ValueError(
+                "LLMEvaluator is only used when scoring_method='llm_judge'"
+            )
+        if self._judge_evaluator is None:
+            import tempfile
+
+            from src.db import Database
+            from src.evaluator import EvaluatorConfig as LLMConfig
+            from src.evaluator import LLMEvaluator as LLMEvaluatorClass
+
+            db_path = tempfile.mktemp(suffix=".db")
+            db = Database(db_path)
+
+            api_key = self.config.judge_api_key or "test-key"
+            models = self.config.judge_models or ["local/mock-judge"]
+            llm_config = LLMConfig(
+                api_key=api_key,
+                judges=models,
+                timeout=self.config.timeout_seconds,
+            )
+            self._judge_evaluator = LLMEvaluatorClass(db, llm_config)
+        return self._judge_evaluator
 
     async def evaluate(self, agent: Agent, suite: TaskSuite) -> AgentRun:
         """Run a task suite against an agent.
@@ -117,6 +161,11 @@ class AgentEvaluator:
 
             try:
                 result = await agent.execute_step(step)
+                # If llm_judge scoring is enabled, re-score the output
+                # using the LLM judge instead of exact match.
+                if self.config.scoring_method == "llm_judge":
+                    judge = self._get_judge_evaluator()
+                    result = await judge.score_step(step, result.agent_output)
                 run.results.append(result)
                 logger.debug(
                     "  result: success=%s score=%.2f",
