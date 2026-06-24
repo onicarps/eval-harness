@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from src.db import CURRENT_SCHEMA_VERSION, Database
 
 
@@ -102,7 +100,7 @@ class TestMigrationV4:
 
     def test_insert_agent_result(self, tmp_path: Path) -> None:
         """Should be able to insert and retrieve agent results."""
-        from src.agent_models import AgentResult, AgentRun, AgentStatus
+        from src.agent_models import AgentResult, AgentRun
 
         db = Database(tmp_path / "eval.db")
         run = AgentRun(suite_id="echo-v1", agent_type="python")

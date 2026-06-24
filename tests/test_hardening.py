@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_httpx import HTTPXMock
@@ -15,7 +14,6 @@ from src.cli import app
 from src.db import Database
 from src.evaluator import EvaluatorConfig, LLMEvaluator
 from src.models import BUILTIN_RUBRIC_V1, EvalRecord, EvalRun, PassFail, RunStatus
-from src.trend import MIN_RUNS_DISPLAY, compute_trends
 
 runner = CliRunner()
 

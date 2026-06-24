@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import json
-import statistics
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -19,7 +17,6 @@ from src.calibrate import (
 )
 from src.db import Database
 from src.models import EvalRecord, EvalResult, EvalRun, PassFail, RunStatus
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -36,7 +33,7 @@ def sample_records() -> list[EvalRecord]:
 @pytest.fixture
 def sample_results_multi_judge() -> list[EvalResult]:
     """Multiple results per record from different judges.
-    
+
     Record 0: high agreement (scores close together).
     Record 1: medium disagreement.
     Record 2: high disagreement (scores spread wide).
@@ -314,7 +311,7 @@ class TestCalibrationRunner:
 
     def test_run_persists_run_to_db(self, db, sample_records):
         """Runner creates and persists EvalRun to DB."""
-        runner = CalibrationRunner(
+        CalibrationRunner(
             db=db,
             api_key="test-key",
             judges=["judge-a"],
@@ -326,9 +323,8 @@ class TestCalibrationRunner:
     def test_run_creates_run_with_correct_config(self, db, sample_records):
         """Run object should have correct config when created."""
         from src.calibrate import CalibrationRunner
-        from src.models import RunStatus
 
-        runner = CalibrationRunner(
+        CalibrationRunner(
             db=db,
             api_key="test-key",
             judges=["judge-a", "judge-b"],

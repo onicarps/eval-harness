@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
 
-from src.agent import Agent, PythonAgent
+from src.agent import PythonAgent
 from src.agent_evaluator import AgentEvaluator, EvaluatorConfig
 from src.agent_models import (
     AgentResult,
@@ -16,11 +12,9 @@ from src.agent_models import (
     AgentStatus,
     ScoringSummary,
     TaskStep,
-    TaskStepType,
     TaskSuite,
 )
 from src.task_suite import get_suite_by_id
-
 
 # ── EvaluatorConfig tests ───────────────────────────────────────────────────────
 

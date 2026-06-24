@@ -3,24 +3,19 @@
 from __future__ import annotations
 
 import json
-import statistics
 from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.db import Database
-from src.models import EvalRecord, EvalResult, EvalRun, PassFail, RunStatus
 from src.evaluator import (
-    LLMEvaluator,
     EvaluatorConfig,
+    LLMEvaluator,
     local_heuristic_score,
-    combine_scores,
-    pass_fail_from,
 )
+from src.models import EvalRecord, EvalResult, EvalRun, PassFail, RunStatus
 from src.reporter import render_comparison_table
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 

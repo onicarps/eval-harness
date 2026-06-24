@@ -6,9 +6,7 @@ scenarios identified during test audit.
 
 from __future__ import annotations
 
-import asyncio
 import json
-import sqlite3
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,28 +16,17 @@ from pytest_httpx import HTTPXMock
 from typer.testing import CliRunner
 
 from src.calibrate import (
-    CalibrationRunner,
     CalibrationSummary,
     _compute_pair_agreement,
     asyncio_run,
-    compute_agreement_metrics,
-    render_calibration_json,
-    render_calibration_summary,
-    strip_ansi,
 )
-from src.cli import app, _judge_list, _get_api_key
+from src.cli import _get_api_key, _judge_list, app
 from src.db import CURRENT_SCHEMA_VERSION, Database
 from src.evaluator import (
     EvaluatorConfig,
     LLMEvaluator,
     _is_permanent_http_error,
     _render_prompt,
-    cache_key_for,
-    combine_scores,
-    estimate_tokens,
-    extract_judge_json,
-    local_heuristic_score,
-    pass_fail_from,
 )
 from src.gate import CheckGateResult, GateRunner
 from src.ingest import (
@@ -49,13 +36,10 @@ from src.ingest import (
     _parse_since,
     _row_after_since,
     ingest_csv,
-    ingest_file,
     ingest_jsonl,
     ingest_stdin,
 )
 from src.judges import (
-    DEFAULT_JUDGE_MODELS,
-    JudgeModel,
     JudgeRegistry,
     _is_free,
 )
@@ -64,7 +48,6 @@ from src.models import (
     EvalRecord,
     EvalResult,
     EvalRun,
-    EvalSummary,
     JudgeCacheEntry,
     PassFail,
     RubricTemplate,
@@ -75,15 +58,9 @@ from src.reporter import (
     build_summary,
     export_results,
     judge_usage,
-    render_comparison_table,
     render_table,
 )
-from src.rubric import RubricManager, RubricTemplate as RubricTemplateParsed
 from src.trend import (
-    MIN_RUNS_DISPLAY,
-    REGRESSION_THRESHOLD,
-    TrendPoint,
-    TrendResult,
     compute_trends,
 )
 
@@ -448,13 +425,13 @@ class TestDbListRunsLimit:
     """list_runs with limit parameter is untested."""
 
     def test_list_runs_custom_limit(self, db: Database) -> None:
-        for i in range(5):
+        for _i in range(5):
             db.insert_run(EvalRun(config={}))
         runs = db.list_runs(limit=3)
         assert len(runs) == 3
 
     def test_list_runs_limit_1(self, db: Database) -> None:
-        for i in range(3):
+        for _i in range(3):
             db.insert_run(EvalRun(config={}))
         runs = db.list_runs(limit=1)
         assert len(runs) == 1
@@ -991,7 +968,7 @@ class TestComputeTrendsEnoughRuns:
 
     def test_trend_with_since_filter(self, db: Database) -> None:
         from datetime import UTC, datetime
-        for i, score in enumerate([0.8, 0.75, 0.85]):
+        for _i, score in enumerate([0.8, 0.75, 0.85]):
             run = EvalRun(
                 config={}, judge_model="j", status=RunStatus.COMPLETED,
                 record_count=1, mean_score=score, pass_rate=0.8,
@@ -1753,7 +1730,7 @@ class TestCLIListRunsCustomLimit:
     """list-runs with custom limit is untested."""
 
     def test_list_runs_custom_limit(self, db: Database) -> None:
-        for i in range(5):
+        for _i in range(5):
             db.insert_run(EvalRun(config={}))
         result = runner.invoke(
             app, ["list-runs", "--limit", "2", "--db", str(db.path)]

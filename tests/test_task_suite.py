@@ -7,16 +7,14 @@ from pathlib import Path
 import pytest
 import yaml
 
-from src.agent_models import TaskStep, TaskStepType, TaskSuite
+from src.agent_models import TaskStepType, TaskSuite
 from src.task_suite import (
-    BUILTIN_SUITES,
     BuiltinSuiteRegistry,
     TaskSuiteRegistry,
     get_suite_by_id,
     load_suite_from_dict,
     load_suite_from_yaml,
 )
-
 
 # ── load_suite_from_dict tests ─────────────────────────────────────────────────
 

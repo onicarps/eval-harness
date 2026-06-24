@@ -14,7 +14,6 @@ from src.db import Database
 from src.gate import CheckGateResult, GateRunner
 from src.models import EvalRecord, EvalResult, EvalRun, PassFail, RunStatus
 
-
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -129,8 +128,8 @@ def multiple_runs(db: Database) -> list[str]:
             record = EvalRecord(
                 record_id=f"{run_id}-rec-{i}",
                 run_id=run_id,
-                input_text=f"Q",
-                output_text=f"A",
+                input_text="Q",
+                output_text="A",
             )
             db.insert_record(record)
         run_ids.append(run_id)

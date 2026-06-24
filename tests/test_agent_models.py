@@ -11,10 +11,9 @@ from src.agent_models import (
     AgentRun,
     AgentStatus,
     TaskStep,
-    TaskSuite,
     TaskStepType,
+    TaskSuite,
 )
-
 
 # ── TaskStep tests ──────────────────────────────────────────────────────────────
 
