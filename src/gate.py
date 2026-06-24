@@ -142,7 +142,7 @@ class GateRunner:
             logger.info("No completed runs with pass_rate to suggest baseline")
             return None
 
-        rates: list[float] = [r.pass_rate for r in completed if r.pass_rate is not None]
+        rates: list[float] = [r.pass_rate for r in completed]  # pyright: ignore[reportAssignmentType]
         if not rates:
             return None
         rates.sort()

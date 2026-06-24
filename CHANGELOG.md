@@ -30,20 +30,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.0] - 2026-06-23
 
 ### Added
-- `eval-harness rubric` command — manage rubric templates (--list, --show, --create-name/--create-file, --delete).
-- `eval-harness trend` command — score timeline with regression detection (--rubric, --judge, --since, --json).
-- `rubric_templates` database table with 5 built-in templates (faithfulness-v1, safety-v1, accuracy-v1, conciseness-v1, custom-v1).
-- `rubric_template_id` column on `eval_runs` for tracking which rubric was used.
+- `eval-harness calibrate` command — measure inter-judge agreement by running all records through every available judge model. Options: `--format`, `--sample`, `--since`, `--limit`, `--output-file`, `--json`.
+- `eval-harness gate` command — CI/CD quality gate that checks a run's pass rate against a threshold. Options: `--run-id`, `--threshold`, `--suggest-baseline`, `--json`, `--output-file`.
+- `--feedback` flag on `run` — generates improvement suggestions for low-scoring records using the judge model.
+- `--compare-judges` flag on `run` — displays a side-by-side comparison table of scores from multiple judges.
+- `--degrade` flag on `run` — uses a local heuristic fallback when the judge API is unreachable, allowing evaluations to continue offline.
+- `src/calibrate.py` module — `CalibrationRunner` and `CalibrationSummary` for inter-judge agreement measurement.
+- `src/gate.py` module — `GateRunner` and `CheckGateResult` for CI/CD quality gates with baseline suggestion.
+- `src/rubric.py` module — `RubricTemplate` and `RubricManager` classes for rubric template CRUD.
+- `src/trend.py` module — `TrendPoint`, `TrendResult`, `compute_trends()` with regression detection.
+- `rubric_templates` database table with 5 built-in templates: `faithfulness-v1`, `safety-v1`, `accuracy-v1`, `conciseness-v1`, `custom-v1`.
+- `rubric_template_id` column on `eval_runs` for tracking which rubric was used per run.
 - `Database.rollback(target_version)` method for migration downgrades.
 - `pyyaml>=6.0` dependency for YAML parsing of rubric templates.
-- `src/rubric.py` module — RubricTemplate and RubricManager classes.
-- `src/trend.py` module — TrendPoint, TrendResult, compute_trends() with regression detection.
 - 18 new tests in `test_rubric.py` for template CRUD and validation.
+- 12 new tests in `test_calibrate.py` for inter-judge agreement measurement.
+- 10 new tests in `test_gate.py` for CI/CD quality gate logic.
 
 ### Changed
 - `CURRENT_SCHEMA_VERSION` bumped to 2.
 - `insert_run`, `update_run`, `get_run`, `list_runs` updated to handle `rubric_template_id`.
 - `--verbose` is now a global option (via `@app.callback()`) available on all commands.
+- README expanded with badges, quickstart, full command reference with examples, configuration, troubleshooting, and CI/CD example.
+- `.env.example` updated with all relevant environment variables.
+- CLI help text improved across all commands with clearer descriptions and usage guidance.
+
+### Fixed
+- Judge registry now falls back to built-in defaults when the on-disk cache file is missing, corrupt, empty, or contains invalid entries.
+- Fixed `evaluated_at` sort key to use a tz-aware `datetime` sentinel, preventing `TypeError` on mixed-timezone databases.
+- Replaced deprecated `datetime.utcnow()` with `datetime.now(UTC)` for Python 3.12 compatibility.
+- Fixed `progress_cb` type annotation from `callable` to `Callable` for proper type checking.
 
 ## [0.1.1] - 2026-06-23
 
@@ -69,7 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Removed phantom `--config` CLI flag (declared but never parsed).
 - Fixed `__init__.py` version mismatch (`0.1.0` -> `0.1.1`).
-- Fixed `AGENTS.md` and `GENERATION_PROMPT.md` env var name: `openrouter_API_KEY` -> `OPENROUTER_API_KEY`.
+- Fixed `AGENTS.md` and `GENERATION_PROMPT.md` env var name: `OPENROUTER_API_KEY` -> `OPENROUTER_API_KEY`.
 - Fixed duplicate `list_runs` method definition in `db.py`.
 
 ## [0.1.0] - 2026-05-29

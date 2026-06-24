@@ -1,4 +1,4 @@
-"""Typer CLI for eval-harness."""
+"""Typer CLI for eval-harness — evaluate LLM outputs against a dual-dimension rubric."""
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ DEFAULT_DB_PATH = Path.home() / ".eval-harness" / "eval.db"
 
 app = typer.Typer(
     name="eval-harness",
-    help="Evaluate LLM outputs against a dual-dimension rubric.",
+    help="Evaluate LLM outputs against a dual-dimension rubric (faithfulness + task completion).",
     add_completion=False,
     no_args_is_help=True,
 )
@@ -75,7 +75,12 @@ app = typer.Typer(
 
 @app.callback()
 def _global_opts(
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Enable debug-level logging (verbose output for troubleshooting).",
+    ),
 ) -> None:
     """Global options for all eval-harness commands."""
     _setup_logging(verbose)
@@ -100,35 +105,152 @@ def _judge_list(
     return ordered[: max(1, max_fallbacks + 1)]
 
 
-@app.command("run", help="Ingest a file, evaluate it, and report.")
+@app.command(
+    "run",
+    help="Ingest a log file, evaluate records against the rubric, and display results.",
+    epilog="Example: eval-harness run logs.jsonl --judge meta-llama/llama-3.1-8b-instruct:free --pass-threshold 0.8",
+)
 def run_cmd(
-    file: Path = typer.Argument(..., help="Input file path (use '-' for stdin)."),
-    format: str = typer.Option("jsonl", "--format", help="jsonl or csv"),
-    input_col: str = typer.Option("input", "--input-col"),
-    output_col: str = typer.Option("output", "--output-col"),
-    reference_col: str = typer.Option("reference", "--reference-col"),
-    sample: int | None = typer.Option(None, "--sample"),
-    since: str | None = typer.Option(None, "--since"),
-    limit: int | None = typer.Option(None, "--limit"),
-    judge: str | None = typer.Option(None, "--judge"),
-    no_fallback: bool = typer.Option(False, "--no-fallback"),
-    max_fallbacks: int = typer.Option(3, "--max-fallbacks"),
-    pass_threshold: float = typer.Option(0.7, "--pass-threshold"),
-    output: str = typer.Option("table", "--output", help="json or table"),
-    output_file: Path | None = typer.Option(None, "--output-file"),
-    dry_run: bool = typer.Option(False, "--dry-run"),
-    resume: bool = typer.Option(False, "--resume"),
-    timeout: float = typer.Option(60.0, "--timeout"),
-    rpm_limit: int | None = typer.Option(None, "--rpm-limit"),
-    yes: bool = typer.Option(False, "--yes"),
-    quiet: bool = typer.Option(False, "--quiet"),
-    feedback: bool = typer.Option(False, "--feedback", help="Generate improvement suggestions for low-scoring records"),
-    compare_judges: bool = typer.Option(False, "--compare-judges", help="Show side-by-side judge comparison"),
-    degrade: bool = typer.Option(False, "--degrade", help="Use local heuristic fallback when judge API is unreachable"),
-    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db"),
-    judges_cache: Path | None = typer.Option(None, "--judges-cache"),
+    file: Path = typer.Argument(
+        ...,
+        help="Path to the input file in JSONL or CSV format. Use '-' to read from stdin.",
+        exists=False,
+        readable=True,
+        resolve_path=False,
+    ),
+    format: str = typer.Option(
+        "jsonl",
+        "--format",
+        help="Input file format: 'jsonl' (one JSON object per line) or 'csv'.",
+    ),
+    input_col: str = typer.Option(
+        "input",
+        "--input-col",
+        help="CSV/JSON column name containing the user prompt.",
+    ),
+    output_col: str = typer.Option(
+        "output",
+        "--output-col",
+        help="CSV/JSON column name containing the model response.",
+    ),
+    reference_col: str = typer.Option(
+        "reference",
+        "--reference-col",
+        help="CSV/JSON column name containing the optional ground truth reference.",
+    ),
+    sample: int | None = typer.Option(
+        None,
+        "--sample",
+        help="Randomly sample N records from the input before evaluating. Useful for quick spot-checks on large datasets.",
+    ),
+    since: str | None = typer.Option(
+        None,
+        "--since",
+        help="Only evaluate records with timestamps after this date (ISO-8601 format, e.g. '2026-06-01').",
+    ),
+    limit: int | None = typer.Option(
+        None,
+        "--limit",
+        help="Maximum number of records to evaluate (after sampling/filtering).",
+    ),
+    judge: str | None = typer.Option(
+        None,
+        "--judge",
+        help="Judge model ID to use (e.g. 'meta-llama/llama-3.1-8b-instruct:free'). If omitted, all available free models are used with round-robin fallback.",
+    ),
+    no_fallback: bool = typer.Option(
+        False,
+        "--no-fallback",
+        help="Disable automatic fallback to other judge models. Only the specified --judge model will be used.",
+    ),
+    max_fallbacks: int = typer.Option(
+        3,
+        "--max-fallbacks",
+        help="Maximum number of fallback judge models to try if the primary judge fails. Ignored if --no-fallback is set.",
+    ),
+    pass_threshold: float = typer.Option(
+        0.7,
+        "--pass-threshold",
+        help="Score threshold (0.0-1.0) below which a record is marked as 'fail'. Default: 0.7.",
+    ),
+    output: str = typer.Option(
+        "table",
+        "--output",
+        help="Output format: 'table' (rich terminal table) or 'json' (machine-readable JSON).",
+    ),
+    output_file: Path | None = typer.Option(
+        None,
+        "--output-file",
+        help="Write output to a file instead of printing to stdout.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Parse the input file and show the record count without calling the judge API. Useful for validating input format.",
+    ),
+    resume: bool = typer.Option(
+        False,
+        "--resume",
+        help="Skip records that were already successfully evaluated in a previous run of the same file.",
+    ),
+    timeout: float = typer.Option(
+        60.0,
+        "--timeout",
+        help="Per-request timeout in seconds for judge API calls.",
+    ),
+    rpm_limit: int | None = typer.Option(
+        None,
+        "--rpm-limit",
+        help="Maximum requests per minute for judge API calls. Useful for staying within rate limits.",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the confirmation prompt and proceed immediately.",
+    ),
+    quiet: bool = typer.Option(
+        False,
+        "--quiet",
+        help="Suppress progress output and non-essential messages.",
+    ),
+    feedback: bool = typer.Option(
+        False,
+        "--feedback",
+        help="Generate improvement suggestions for records that score below the pass threshold. Uses the judge model to provide actionable feedback.",
+    ),
+    compare_judges: bool = typer.Option(
+        False,
+        "--compare-judges",
+        help="Display a side-by-side comparison of scores from multiple judge models. Requires 2+ judges to be available.",
+    ),
+    degrade: bool = typer.Option(
+        False,
+        "--degrade",
+        help="Use a local heuristic fallback when the judge API is unreachable. Allows evaluations to continue offline with reduced accuracy.",
+    ),
+    db_path: Path = typer.Option(
+        DEFAULT_DB_PATH,
+        "--db",
+        help="Path to the SQLite database file for storing runs and results.",
+    ),
+    judges_cache: Path | None = typer.Option(
+        None,
+        "--judges-cache",
+        help="Path to the judge registry cache file. Defaults to ~/.eval-harness/judges.json.",
+    ),
 ) -> None:
-    """Run ingest + evaluation pipeline."""
+    """Ingest a log file, evaluate records against the rubric, and display results.
+
+    This is the primary command. It reads records from a JSONL or CSV file (or stdin),
+    sends each record to an LLM judge for scoring, and displays a summary table with
+    pass/fail results. Results are persisted in a SQLite database for later review.
+
+    Exit codes:
+        0 — All records passed (score >= pass_threshold).
+        1 — One or more records failed.
+        2 — Evaluator error (missing API key, file not found, etc.).
+    """
     console = Console(quiet=quiet)
     options = IngestOptions(
         input_col=input_col,
@@ -353,14 +475,35 @@ def run_cmd(
         db.close()
 
 
-@app.command("judges", help="List free judge models.")
+@app.command(
+    "judges",
+    help="List available free judge models from OpenRouter.",
+    epilog="Example: eval-harness judges --refresh",
+)
 def judges_cmd(
-    refresh: bool = typer.Option(False, "--refresh"),
-    json_out: bool = typer.Option(False, "--json"),
-    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db"),
-    judges_cache: Path | None = typer.Option(None, "--judges-cache"),
+    refresh: bool = typer.Option(
+        False,
+        "--refresh",
+        help="Force-refresh the judge list from the OpenRouter API. Without this flag, the cached list is used.",
+    ),
+    json_out: bool = typer.Option(
+        False,
+        "--json",
+        help="Output the judge list as JSON instead of a formatted table.",
+    ),
+    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db", help="Path to the SQLite database."),
+    judges_cache: Path | None = typer.Option(
+        None,
+        "--judges-cache",
+        help="Path to the judge registry cache file. Defaults to ~/.eval-harness/judges.json.",
+    ),
 ) -> None:
-    """List or refresh the cached judge registry."""
+    """List or refresh the cached judge registry.
+
+    Fetches the list of free (zero-cost) judge models available on OpenRouter.
+    Results are cached locally so subsequent runs work offline. Use --refresh
+    to force an update from the API.
+    """
     registry = JudgeRegistry(cache_path=judges_cache) if judges_cache else JudgeRegistry()
     if refresh:
         try:
@@ -377,14 +520,35 @@ def judges_cmd(
         console.print(f"{m.id}\tctx={m.context_length}\t{m.name}")
 
 
-@app.command("report", help="Show a previously stored run.")
+@app.command(
+    "report",
+    help="Display results from a previously stored evaluation run.",
+    epilog="Example: eval-harness report --run-id <RUN_ID> --output json",
+)
 def report_cmd(
-    run_id: str = typer.Option(..., "--run-id"),
-    output: str = typer.Option("table", "--output", help="json, table, or csv"),
-    output_file: Path | None = typer.Option(None, "--output-file"),
-    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db"),
+    run_id: str = typer.Option(
+        ...,
+        "--run-id",
+        help="The unique ID of the evaluation run to display.",
+    ),
+    output: str = typer.Option(
+        "table",
+        "--output",
+        help="Output format: 'table' (rich terminal), 'json', or 'csv'.",
+    ),
+    output_file: Path | None = typer.Option(
+        None,
+        "--output-file",
+        help="Write the report to a file instead of printing to stdout.",
+    ),
+    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db", help="Path to the SQLite database."),
 ) -> None:
-    """Display a previously stored run."""
+    """Display a previously stored run.
+
+    Retrieves a completed evaluation run from the database and displays
+    its summary, including per-record scores, pass/fail counts, and
+    timing information.
+    """
     db = Database(db_path)
     try:
         run = db.get_run(run_id)
@@ -412,14 +576,35 @@ def report_cmd(
         db.close()
 
 
-@app.command("export", help="Export a run to JSON or CSV.")
+@app.command(
+    "export",
+    help="Export a run's full results to JSON or CSV.",
+    epilog="Example: eval-harness export --run-id <RUN_ID> --format json --output-file results.json",
+)
 def export_cmd(
-    run_id: str = typer.Option(..., "--run-id"),
-    format: str = typer.Option("json", "--format", help="json or csv"),
-    output_file: Path = typer.Option(..., "--output-file"),
-    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db"),
+    run_id: str = typer.Option(
+        ...,
+        "--run-id",
+        help="The unique ID of the evaluation run to export.",
+    ),
+    format: str = typer.Option(
+        "json",
+        "--format",
+        help="Export format: 'json' (full structured data) or 'csv' (flat table).",
+    ),
+    output_file: Path = typer.Option(
+        ...,
+        "--output-file",
+        help="Path to write the exported file.",
+    ),
+    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db", help="Path to the SQLite database."),
 ) -> None:
-    """Export a run's full payload."""
+    """Export a run's full payload.
+
+    Exports all records and scores from a completed run to a file.
+    JSON export includes full per-record detail; CSV export is a flat table
+    suitable for spreadsheets or further analysis.
+    """
     db = Database(db_path)
     try:
         run = db.get_run(run_id)
@@ -433,13 +618,30 @@ def export_cmd(
         db.close()
 
 
-@app.command("cache", help="Inspect or clear the judge response cache.")
+@app.command(
+    "cache",
+    help="Inspect or clear the judge response cache.",
+    epilog="Example: eval-harness cache --stats",
+)
 def cache_cmd(
-    clear: bool = typer.Option(False, "--clear"),
-    stats: bool = typer.Option(False, "--stats"),
-    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db"),
+    clear: bool = typer.Option(
+        False,
+        "--clear",
+        help="Remove all cached judge responses. The cache will be rebuilt on the next evaluation run.",
+    ),
+    stats: bool = typer.Option(
+        False,
+        "--stats",
+        help="Display cache statistics: entry count, hit rate, and approximate size.",
+    ),
+    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db", help="Path to the SQLite database."),
 ) -> None:
-    """Inspect or clear the judge response cache."""
+    """Inspect or clear the judge response cache.
+
+    Judge responses are cached in the SQLite database to avoid redundant
+    API calls when re-evaluating the same records. Use --stats to see
+    cache utilization, or --clear to reset it.
+    """
     db = Database(db_path)
     try:
         if clear:
@@ -452,13 +654,30 @@ def cache_cmd(
         db.close()
 
 
-@app.command("list-runs", help="List previous evaluation runs.")
+@app.command(
+    "list-runs",
+    help="List all previous evaluation runs.",
+    epilog="Example: eval-harness list-runs --limit 50",
+)
 def list_runs_cmd(
-    limit: int = typer.Option(20, "--limit", help="Maximum number of runs to show."),
-    json_out: bool = typer.Option(False, "--json"),
-    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db"),
+    limit: int = typer.Option(
+        20,
+        "--limit",
+        help="Maximum number of runs to display (most recent first).",
+    ),
+    json_out: bool = typer.Option(
+        False,
+        "--json",
+        help="Output the run list as JSON instead of a formatted table.",
+    ),
+    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db", help="Path to the SQLite database."),
 ) -> None:
-    """List previous evaluation runs."""
+    """List previous evaluation runs.
+
+    Shows a summary of all stored evaluation runs, including record count,
+    status, pass rate, and mean score. Useful for finding a run ID to use
+    with the `report`, `export`, or `gate` commands.
+    """
     db = Database(db_path)
     try:
         runs = db.list_runs(limit=limit)
@@ -493,17 +712,51 @@ def list_runs_cmd(
         db.close()
 
 
-@app.command("rubric", help="Manage rubric templates.")
+@app.command(
+    "rubric",
+    help="Manage rubric templates for evaluation.",
+    epilog="Example: eval-harness rubric --list",
+)
 def rubric_cmd(
-    list_templates: bool = typer.Option(False, "--list", help="List all rubric templates."),
-    show: str | None = typer.Option(None, "--show", help="Show a template by ID."),
-    create_name: str | None = typer.Option(None, "--create-name", help="Name for new template."),
-    create_file: Path | None = typer.Option(None, "--create-file", help="YAML file for new template."),
-    delete_id: str | None = typer.Option(None, "--delete", help="Delete a template by ID."),
-    json_out: bool = typer.Option(False, "--json"),
-    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db"),
+    list_templates: bool = typer.Option(
+        False,
+        "--list",
+        help="List all available rubric templates (built-in and custom).",
+    ),
+    show: str | None = typer.Option(
+        None,
+        "--show",
+        help="Display the full content of a specific rubric template by its ID.",
+    ),
+    create_name: str | None = typer.Option(
+        None,
+        "--create-name",
+        help="Name for a new rubric template. Use with --create-file to specify the YAML definition.",
+    ),
+    create_file: Path | None = typer.Option(
+        None,
+        "--create-file",
+        help="Path to a YAML file containing the rubric definition. Use with --create-name.",
+    ),
+    delete_id: str | None = typer.Option(
+        None,
+        "--delete",
+        help="Delete a custom rubric template by its ID. Built-in templates cannot be deleted.",
+    ),
+    json_out: bool = typer.Option(
+        False,
+        "--json",
+        help="Output results as JSON instead of formatted text.",
+    ),
+    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db", help="Path to the SQLite database."),
 ) -> None:
-    """Manage rubric templates."""
+    """Manage rubric templates.
+
+    Rubric templates define the dimensions and scoring criteria used to
+    evaluate records. Built-in templates include faithfulness, safety,
+    accuracy, and conciseness. You can create custom templates from YAML
+    files for domain-specific evaluation needs.
+    """
     db = Database(db_path)
     try:
         manager = RubricManager(db)
@@ -576,15 +829,40 @@ def rubric_cmd(
         db.close()
 
 
-@app.command("trend", help="Show score timeline and regression detection.")
+@app.command(
+    "trend",
+    help="Show score timeline with regression detection across runs.",
+    epilog="Example: eval-harness trend --since 2026-06-01",
+)
 def trend_cmd(
-    rubric_template_id: str | None = typer.Option(None, "--rubric", help="Filter by rubric template ID."),
-    judge_model: str | None = typer.Option(None, "--judge", help="Filter by judge model."),
-    since: str | None = typer.Option(None, "--since", help="Only show runs after this date (ISO-8601)."),
-    json_out: bool = typer.Option(False, "--json"),
-    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db"),
+    rubric_template_id: str | None = typer.Option(
+        None,
+        "--rubric",
+        help="Filter by rubric template ID (e.g. 'faithfulness-v1').",
+    ),
+    judge_model: str | None = typer.Option(
+        None,
+        "--judge",
+        help="Filter by judge model ID (e.g. 'meta-llama/llama-3.1-8b-instruct:free').",
+    ),
+    since: str | None = typer.Option(
+        None,
+        "--since",
+        help="Only show runs after this date (ISO-8601 format, e.g. '2026-06-01').",
+    ),
+    json_out: bool = typer.Option(
+        False,
+        "--json",
+        help="Output the trend data as JSON instead of a formatted table.",
+    ),
+    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db", help="Path to the SQLite database."),
 ) -> None:
-    """Show score timeline and regression detection."""
+    """Show score timeline and regression detection.
+
+    Displays a chronological view of evaluation run scores, with automatic
+    detection of score regressions (significant drops between consecutive
+    runs). Requires at least 2 completed runs to display trends.
+    """
     db = Database(db_path)
     try:
         since_dt = None
@@ -674,22 +952,78 @@ def trend_cmd(
         db.close()
 
 
-@app.command("calibrate", help="Measure inter-judge agreement on a dataset.")
+@app.command(
+    "calibrate",
+    help="Measure inter-judge agreement by running all records through every judge.",
+    epilog="Example: eval-harness calibrate logs.jsonl --sample 20",
+)
 def calibrate_cmd(
-    file: Path = typer.Argument(..., help="Input file path (use '-' for stdin)."),
-    format: str = typer.Option("jsonl", "--format", help="jsonl or csv"),
-    input_col: str = typer.Option("input", "--input-col"),
-    output_col: str = typer.Option("output", "--output-col"),
-    reference_col: str = typer.Option("reference", "--reference-col"),
-    sample: int | None = typer.Option(None, "--sample"),
-    since: str | None = typer.Option(None, "--since"),
-    limit: int | None = typer.Option(None, "--limit"),
-    output_file: Path | None = typer.Option(None, "--output-file"),
-    json_out: bool = typer.Option(False, "--json"),
-    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db"),
-    judges_cache: Path | None = typer.Option(None, "--judges-cache"),
+    file: Path = typer.Argument(
+        ...,
+        help="Path to the input file in JSONL or CSV format. Use '-' to read from stdin.",
+        exists=False,
+        readable=True,
+        resolve_path=False,
+    ),
+    format: str = typer.Option(
+        "jsonl",
+        "--format",
+        help="Input file format: 'jsonl' or 'csv'.",
+    ),
+    input_col: str = typer.Option(
+        "input",
+        "--input-col",
+        help="Column name for the user prompt.",
+    ),
+    output_col: str = typer.Option(
+        "output",
+        "--output-col",
+        help="Column name for the model response.",
+    ),
+    reference_col: str = typer.Option(
+        "reference",
+        "--reference-col",
+        help="Column name for the optional ground truth reference.",
+    ),
+    sample: int | None = typer.Option(
+        None,
+        "--sample",
+        help="Randomly sample N records for calibration. Reduces API cost.",
+    ),
+    since: str | None = typer.Option(
+        None,
+        "--since",
+        help="Only evaluate records with timestamps after this date (ISO-8601 format).",
+    ),
+    limit: int | None = typer.Option(
+        None,
+        "--limit",
+        help="Maximum number of records to evaluate.",
+    ),
+    output_file: Path | None = typer.Option(
+        None,
+        "--output-file",
+        help="Write the calibration report to a file instead of stdout.",
+    ),
+    json_out: bool = typer.Option(
+        False,
+        "--json",
+        help="Output the calibration results as JSON instead of a formatted report.",
+    ),
+    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db", help="Path to the SQLite database."),
+    judges_cache: Path | None = typer.Option(
+        None,
+        "--judges-cache",
+        help="Path to the judge registry cache file.",
+    ),
 ) -> None:
-    """Run all records through every judge and report disagreement."""
+    """Run all records through every judge and report disagreement.
+
+    Sends each record to every available free judge model and compares the
+    scores. Reports agreement rates, per-judge statistics, and highlights
+    records where judges disagree significantly. Useful for validating that
+    your chosen judge model produces consistent results.
+    """
     console = Console()
     options = IngestOptions(
         input_col=input_col,
@@ -752,16 +1086,48 @@ def calibrate_cmd(
         db.close()
 
 
-@app.command("gate", help="CI/CD quality gate — check if a run meets a threshold.")
+@app.command(
+    "gate",
+    help="CI/CD quality gate — check if a run meets a pass-rate threshold.",
+    epilog="Example: eval-harness gate --run-id <RUN_ID> --threshold 0.8",
+)
 def gate_cmd(
-    run_id: str | None = typer.Option(None, "--run-id", help="Run ID to check against threshold."),
-    threshold: float = typer.Option(0.7, "--threshold", help="Pass rate threshold (0.0–1.0)."),
-    suggest_baseline: bool = typer.Option(False, "--suggest-baseline", help="Analyze history and suggest a baseline."),
-    json_out: bool = typer.Option(False, "--json", help="Output result as JSON."),
-    output_file: Path | None = typer.Option(None, "--output-file", help="Write output to file."),
-    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db"),
+    run_id: str | None = typer.Option(
+        None,
+        "--run-id",
+        help="Run ID to check against the threshold. Required unless using --suggest-baseline.",
+    ),
+    threshold: float = typer.Option(
+        0.7,
+        "--threshold",
+        help="Pass rate threshold (0.0-1.0). The run passes if its pass rate >= this value.",
+    ),
+    suggest_baseline: bool = typer.Option(
+        False,
+        "--suggest-baseline",
+        help="Analyze historical run data and suggest an appropriate threshold based on median pass rate.",
+    ),
+    json_out: bool = typer.Option(
+        False,
+        "--json",
+        help="Output the gate result as JSON instead of formatted text.",
+    ),
+    output_file: Path | None = typer.Option(
+        None,
+        "--output-file",
+        help="Write the gate result to a file instead of stdout.",
+    ),
+    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db", help="Path to the SQLite database."),
 ) -> None:
-    """CI/CD quality gate — check if a run meets a threshold, or suggest one from history."""
+    """CI/CD quality gate — check if a run meets a threshold, or suggest one from history.
+
+    Checks whether a completed evaluation run's pass rate meets a specified
+    threshold. Returns exit code 0 (pass) or 1 (fail), making it suitable
+    for use in CI/CD pipelines to block deployments when quality drops.
+
+    Use --suggest-baseline to analyze your run history and get a data-driven
+    threshold recommendation.
+    """
     db = Database(db_path)
     try:
         if suggest_baseline:

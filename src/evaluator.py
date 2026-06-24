@@ -148,13 +148,13 @@ def cache_key_for(
 def _build_feedback_prompt(combined_score: float, faithfulness: float, task_completion: float, input_text: str, output_text: str, reference_text: str) -> str:
     """Build the feedback prompt for a low-scoring record."""
     return (
-        "You are an evaluation assistant. A model produced the following output for "
-        "the given input. The output scored " + f"{combined_score:.2f} "
-        + "(faithfulness: " + f"{faithfulness:.2f}" + ", task_completion: " + f"{task_completion:.2f}" + "). "
-        + "Provide 2-3 specific, actionable suggestions to improve the score. "
-        + "Return STRICT JSON only with the key 'suggestions' as a list of strings. "
-        + 'Example: {"suggestions": ["suggestion1", "suggestion2"]}. '
-        + "\nINPUT:\n" + input_text + "\n\nOUTPUT:\n" + output_text + "\n\nREFERENCE:\n" + (reference_text or "(none)") + "\n"
+        f"You are an evaluation assistant. A model produced the following output for "
+        f"the given input. The output scored {combined_score:.2f} "
+        f"(faithfulness: {faithfulness:.2f}, task_completion: {task_completion:.2f}). "
+        f"Provide 2-3 specific, actionable suggestions to improve the score. "
+        f"Return STRICT JSON only with the key 'suggestions' as a list of strings. "
+        f'Example: {{"suggestions": ["suggestion1", "suggestion2"]}}. '
+        f"\nINPUT:\n{input_text}\n\nOUTPUT:\n{output_text}\n\nREFERENCE:\n{reference_text or '(none)'}\n"
     )
 
 

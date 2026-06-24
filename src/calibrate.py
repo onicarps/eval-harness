@@ -21,7 +21,7 @@ import statistics
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from src.db import Database
 from src.ingest import IngestOptions, ingest_file, ingest_stdin
@@ -291,23 +291,10 @@ class CalibrationRunner:
         """
         from src.evaluator import EvaluatorConfig, LLMEvaluator  # avoid circular
 
+        from src.models import BUILTIN_RUBRIC_V1
+
         if rubric is None:
-            rubric = cast(RubricTemplate, RubricTemplate(
-                rubric_id="faithfulness-v1",
-                version="1.0",
-                description="Dual-dimension rubric: faithfulness + task completion.",
-                prompt_template=(
-                    "You are an impartial evaluator. Score the assistant's output on two "
-                    "dimensions: FAITHFULNESS (does it stay grounded in the input/reference "
-                    "without hallucination?) and TASK_COMPLETION (does it satisfy what was "
-                    "asked?). Each dimension is a float in [0.0, 1.0].\n\n"
-                    "Return STRICT JSON only, with the following keys: "
-                    '{"faithfulness": float, "task_completion": float, '
-                    '"faithfulness_reasoning": str, "task_completion_reasoning": str, '
-                    '"reasoning": str}.\n\n'
-                    "INPUT:\n{input}\n\nOUTPUT:\n{output}\n\nREFERENCE:\n{reference}\n"
-                ),
-            ))
+            rubric = BUILTIN_RUBRIC_V1
 
         run_id = run_id or _new_id()
         run = EvalRun(
