@@ -18,8 +18,14 @@ from dotenv import load_dotenv
 from rich.console import Console
 from rich.table import Table
 
+from src.calibrate import (
+    CalibrationRunner,
+    render_calibration_json,
+    render_calibration_summary,
+)
 from src.db import Database
 from src.evaluator import EvaluatorConfig, LLMEvaluator
+from src.gate import GateRunner
 from src.ingest import IngestOptions, _parse_since, ingest_file, ingest_stdin
 from src.judges import JudgeRegistry
 from src.models import BUILTIN_RUBRIC_V1, EvalRun, RunStatus
@@ -30,12 +36,6 @@ from src.reporter import (
     render_table,
 )
 from src.rubric import RubricManager
-from src.calibrate import (
-    CalibrationRunner,
-    render_calibration_json,
-    render_calibration_summary,
-)
-from src.gate import GateRunner
 from src.trend import MIN_RUNS_DISPLAY, compute_trends
 
 # Load environment variables from .env file
@@ -278,9 +278,9 @@ def run_cmd(
     if since:
         try:
             _parse_since(since)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as err:
             console.print(f"[red]invalid --since date: {since}[/red]")
-            raise typer.Exit(code=2)
+            raise typer.Exit(code=2) from err
 
     if dry_run:
         console.print(f"[green]dry-run: {len(records)} record(s) parsed.[/green]")

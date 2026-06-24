@@ -20,12 +20,9 @@ import re
 import statistics
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from src.db import Database
-from src.ingest import IngestOptions, ingest_file, ingest_stdin
-from src.judges import JudgeRegistry
 from src.models import (
     EvalRecord,
     EvalResult,
@@ -66,7 +63,7 @@ class CalibrationSummary:
         judges: list[str],
         *,
         disagreement_threshold: float = 0.1,
-    ) -> "CalibrationSummary":
+    ) -> CalibrationSummary:
         """Build a summary from raw ``EvalResult`` entries."""
         if not results:
             return cls(run_id=run_id, total_records=0, total_judges=len(judges))
@@ -223,7 +220,7 @@ def _compute_pair_agreement(
                 continue
             agree_count = 0
             total = 0
-            for rec_id, judges_map in record_judges.items():
+            for _rec_id, judges_map in record_judges.items():
                 if j1 in judges_map and j2 in judges_map:
                     total += 1
                     if judges_map[j1] == judges_map[j2]:
@@ -290,7 +287,6 @@ class CalibrationRunner:
             CalibrationSummary with agreement metrics.
         """
         from src.evaluator import EvaluatorConfig, LLMEvaluator  # avoid circular
-
         from src.models import BUILTIN_RUBRIC_V1
 
         if rubric is None:

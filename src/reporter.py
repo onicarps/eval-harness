@@ -128,7 +128,6 @@ def render_comparison_table(
     table.add_column("Std Dev", justify="center")
     table.add_column("Agree", justify="center")
 
-    rec_map = {r.record_id: r for r in records}
     for record in records:
         rec_results = [r for r in results if r.record_id == record.record_id]
         if not rec_results:
