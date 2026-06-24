@@ -18,6 +18,8 @@ from dotenv import load_dotenv
 from rich.console import Console
 from rich.table import Table
 
+from src.agent_evaluator import AgentEvaluator
+from src.agent_evaluator import EvaluatorConfig as AgentEvaluatorConfig
 from src.calibrate import (
     CalibrationRunner,
     render_calibration_json,
@@ -36,6 +38,7 @@ from src.reporter import (
     render_table,
 )
 from src.rubric import RubricManager
+from src.task_suite import BuiltinSuiteRegistry
 from src.trend import MIN_RUNS_DISPLAY, compute_trends
 
 # Load environment variables from .env file
@@ -1170,6 +1173,216 @@ def gate_cmd(
         raise typer.Exit(code=2) from None
     finally:
         db.close()
+
+
+@app.command(
+    "agent",
+    help="Evaluate an agent's behavior in an environment using task suites.",
+    epilog="Example: eval-harness agent eval --suite echo-v1 --agent-subprocess 'python my_agent.py'",
+)
+def agent_eval_cmd(
+    suite: str = typer.Option(
+        "echo-v1",
+        "--suite",
+        help="Task suite ID to run (use 'eval-harness agent list-suites' to see available).",
+    ),
+    agent_subprocess: str | None = typer.Option(
+        None,
+        "--agent-subprocess",
+        help="Command to launch a subprocess agent (NDJSON over stdin/stdout).",
+    ),
+    agent_python: str | None = typer.Option(
+        None,
+        "--agent-python",
+        help="Python agent module path (e.g. 'mymodule:my_agent_func').",
+    ),
+    max_steps: int = typer.Option(
+        10,
+        "--max-steps",
+        help="Maximum number of steps per task before marking as failed.",
+    ),
+    timeout: int = typer.Option(
+        60,
+        "--timeout",
+        help="Per-step timeout in seconds.",
+    ),
+    pass_threshold: float = typer.Option(
+        0.7,
+        "--pass-threshold",
+        help="Score threshold (0.0-1.0) for pass/fail.",
+    ),
+    output: str = typer.Option(
+        "table",
+        "--output",
+        help="Output format: table or json.",
+    ),
+    output_file: Path | None = typer.Option(
+        None,
+        "--output-file",
+        help="Write results to a file.",
+    ),
+    db_path: Path = typer.Option(DEFAULT_DB_PATH, "--db", help="Path to the SQLite database."),
+) -> None:
+    """Evaluate an agent's behavior by running it through a task suite.
+
+    Launches the specified agent, runs it through each task in the suite,
+    and scores the trajectory based on output correctness and step efficiency.
+
+    Provide either --agent-subprocess or --agent-python to specify the agent.
+    """
+    if agent_subprocess is None and agent_python is None:
+        typer.echo("error: provide --agent-subprocess or --agent-python", err=True)
+        raise typer.Exit(code=2) from None
+
+    if agent_subprocess and agent_python:
+        typer.echo("error: provide only one of --agent-subprocess or --agent-python", err=True)
+        raise typer.Exit(code=2) from None
+
+    import asyncio
+
+    db = Database(db_path)
+    try:
+        suite_obj = BuiltinSuiteRegistry.get(suite)
+        if suite_obj is None:
+            available = ", ".join(BuiltinSuiteRegistry.list_ids())
+            typer.echo(f"error: unknown suite '{suite}'. Available: {available}", err=True)
+            raise typer.Exit(code=2) from None
+
+        from src.agent import PythonAgent, SubprocessAgent
+
+        if agent_subprocess:
+            agent = SubprocessAgent(
+                name="subprocess",
+                command=agent_subprocess.split(),
+                timeout=float(timeout),
+            )
+        else:
+            agent_python_val: str = agent_python
+            module_path, func_name = agent_python_val.split(":") if ":" in agent_python_val else (agent_python_val, "run")
+            import importlib
+            mod = importlib.import_module(module_path)
+            agent_func = getattr(mod, func_name)
+            agent = PythonAgent(
+                name="python",
+                handler=agent_func,
+                timeout=float(timeout),
+            )
+
+        evaluator = AgentEvaluator(AgentEvaluatorConfig(
+            pass_threshold=pass_threshold,
+            max_steps_per_run=max_steps,
+            timeout_seconds=float(timeout),
+        ))
+
+        async def run_eval():
+            run = await evaluator.evaluate(agent, suite_obj)
+            await agent.stop()
+            return run
+
+        run = asyncio.run(run_eval())
+        summary = evaluator.compute_summary(run, suite_obj)
+
+        if output == "json":
+            result_json = {
+                "run_id": run.run_id,
+                "suite_id": run.suite_id,
+                "agent_type": run.agent_type,
+                "status": run.status,
+                "mean_score": summary.mean_score,
+                "pass_rate": summary.pass_rate,
+                "efficiency": summary.efficiency,
+                "steps_total": summary.steps_total,
+                "steps_passed": summary.steps_passed,
+                "results": [
+                    {
+                        "step_id": r.step_id,
+                        "success": r.success,
+                        "score": r.score,
+                        "error": r.error,
+                    }
+                    for r in run.results
+                ],
+            }
+            output_text = json.dumps(result_json, indent=2, default=str)
+        else:
+            console = Console()
+            console.print(f"[bold]Agent Eval: {suite.name}[/bold]")
+            console.print(f"  Run ID: {run.run_id}")
+            console.print(f"  Agent: {run.agent_type} ({run.config.get('agent_name', '?')})")
+            console.print(f"  Status: {run.status}")
+            console.print(f"  Mean Score: {summary.mean_score:.2f}")
+            console.print(f"  Pass Rate: {summary.pass_rate:.1%}")
+            console.print(f"  Efficiency: {summary.efficiency:.2f}")
+            console.print(f"  Steps: {summary.steps_passed}/{summary.steps_total} passed")
+            console.print()
+
+            table = Table(title="Step Results")
+            table.add_column("Step", style="cyan")
+            table.add_column("Success", justify="center")
+            table.add_column("Score", justify="right")
+            table.add_column("Error", style="red")
+            for r in run.results:
+                success_str = "✓" if r.success else "✗"
+                score_str = f"{r.score:.2f}"
+                error_str = r.error or ""
+                table.add_row(r.step_id, success_str, score_str, error_str)
+            console.print(table)
+
+            output_text = f"Agent eval complete: {summary.steps_passed}/{summary.steps_total} passed ({summary.pass_rate:.1%})"
+
+        if output_file:
+            Path(output_file).write_text(output_text)
+        else:
+            if output != "json":
+                pass  # already printed above
+            else:
+                typer.echo(output_text)
+
+        db.insert_agent_run(run)
+        for r in run.results:
+            db.insert_agent_result(r)
+
+        if summary.pass_rate < pass_threshold:
+            raise typer.Exit(code=1) from None
+
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2) from None
+    finally:
+        db.close()
+
+
+@app.command(
+    "agent-list-suites",
+    help="List all available agent task suites.",
+)
+def agent_list_suites_cmd(
+    json_out: bool = typer.Option(False, "--json", help="Output as JSON."),
+) -> None:
+    """List all available task suites for agent evaluation."""
+    registry = BuiltinSuiteRegistry
+    suites = [
+        {
+            "suite_id": s.suite_id,
+            "name": s.name,
+            "description": s.description,
+            "step_count": len(s.steps),
+        }
+        for s in registry.all()
+    ]
+
+    if json_out:
+        typer.echo(json.dumps(suites, indent=2, default=str))
+    else:
+        console = Console()
+        table = Table(title="Available Task Suites")
+        table.add_column("ID", style="cyan")
+        table.add_column("Name")
+        table.add_column("Description")
+        table.add_column("Steps", justify="right")
+        for s in suites:
+            table.add_row(s["suite_id"], s["name"], s["description"], str(s["step_count"]))
+        console.print(table)
 
 
 if __name__ == "__main__":  # pragma: no cover

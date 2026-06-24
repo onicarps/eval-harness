@@ -22,11 +22,10 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from src.db import Database
-from src.models import EvalRun, RunStatus
+from src.models import RunStatus
 
 logger = logging.getLogger(__name__)
 

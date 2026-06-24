@@ -10,10 +10,23 @@ import csv
 import json
 import logging
 import sqlite3
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from src.agent_models import (
+    AgentResult as AgentResultRow,
+)
+from src.agent_models import (
+    AgentRun as AgentRunRow,
+)
+from src.agent_models import (
+    AgentStatus as AgentStatusEnum,
+)
+from src.agent_models import (
+    TaskSuite as TaskSuiteRow,
+)
 from src.models import (
     EvalRecord,
     EvalResult,
@@ -23,7 +36,7 @@ from src.models import (
     RunStatus,
 )
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -117,6 +130,48 @@ _MIGRATIONS: dict[int, list[str]] = {
     3: [
         "ALTER TABLE eval_results ADD COLUMN feedback TEXT DEFAULT '';",
     ],
+    4: [
+        """
+        CREATE TABLE IF NOT EXISTS agent_runs (
+            run_id TEXT PRIMARY KEY,
+            suite_id TEXT NOT NULL,
+            agent_type TEXT NOT NULL,
+            status TEXT DEFAULT 'running',
+            created_at TEXT NOT NULL,
+            completed_at TEXT,
+            config_json TEXT NOT NULL DEFAULT '{}',
+            total_steps INTEGER DEFAULT 0,
+            completed_steps INTEGER DEFAULT 0,
+            mean_score REAL
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_agent_runs_suite ON agent_runs(suite_id);",
+        """
+        CREATE TABLE IF NOT EXISTS agent_results (
+            result_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL REFERENCES agent_runs(run_id),
+            step_id TEXT NOT NULL,
+            agent_output TEXT NOT NULL DEFAULT '',
+            success INTEGER DEFAULT 0,
+            score REAL DEFAULT 0.0,
+            error TEXT,
+            duration_seconds REAL DEFAULT 0.0,
+            tokens_used INTEGER,
+            completed_at TEXT NOT NULL
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_agent_results_run ON agent_results(run_id);",
+        """
+        CREATE TABLE IF NOT EXISTS agent_task_suites (
+            suite_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            yaml_content TEXT NOT NULL,
+            is_builtin INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        """,
+    ],
 }
 
 # Rollback SQL for each migration version.  _rollback(version) applies these
@@ -138,6 +193,13 @@ _ROLLBACKS: dict[int, list[str]] = {
     ],
     3: [
         "ALTER TABLE eval_results DROP COLUMN feedback;",
+    ],
+    4: [
+        "DROP INDEX IF EXISTS idx_agent_results_run;",
+        "DROP TABLE IF EXISTS agent_results;",
+        "DROP INDEX IF EXISTS idx_agent_runs_suite;",
+        "DROP TABLE IF EXISTS agent_runs;",
+        "DROP TABLE IF EXISTS agent_task_suites;",
     ],
 }
 
@@ -222,6 +284,9 @@ class Database:
             # Seed initial data for version 2
             if version == 2:
                 self._seed_rubric_templates(cur)
+            # Seed built-in agent task suites for version 4
+            if version == 4:
+                self._seed_agent_task_suites(cur)
 
         if current >= CURRENT_SCHEMA_VERSION:
             logger.debug("Database is already at version %d (latest: %d)", current, CURRENT_SCHEMA_VERSION)
@@ -709,3 +774,179 @@ class Database:
         else:
             raise ValueError(f"unsupported export format: {fmt}")
         return out_path
+
+    # ── Agent-specific CRUD ──────────────────────────────────────────────────
+
+    def _seed_agent_task_suites(self, cur: sqlite3.Cursor) -> None:
+        """Seed the agent_task_suites table with 5 built-in suites if empty."""
+        cur.execute("SELECT COUNT(*) FROM agent_task_suites;")
+        if cur.fetchone()[0] > 0:
+            return
+        from src.task_suite import BuiltinSuiteRegistry
+
+        now = datetime.now(UTC).isoformat()
+        for suite in BuiltinSuiteRegistry.all():
+            cur.execute(
+                "INSERT OR IGNORE INTO agent_task_suites "
+                "(suite_id, name, description, yaml_content, is_builtin, created_at) "
+                "VALUES (?, ?, ?, ?, 1, ?);",
+                (
+                    suite.suite_id,
+                    suite.name,
+                    suite.description,
+                    suite.model_dump_json(),
+                    now,
+                ),
+            )
+        self.connection.commit()
+        logger.info("Seeded %d built-in agent task suites", len(BuiltinSuiteRegistry.all()))
+
+    def insert_agent_run(self, run: AgentRunRow) -> None:
+        """Insert a new agent run row."""
+        self.connection.execute(
+            """
+            INSERT INTO agent_runs (
+                run_id, suite_id, agent_type, status, created_at,
+                completed_at, config_json, total_steps, completed_steps, mean_score
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                run.run_id,
+                run.suite_id,
+                run.agent_type,
+                run.status.value if isinstance(run.status, AgentStatusEnum) else run.status,
+                _iso(run.created_at),
+                _iso(run.completed_at),
+                json.dumps(run.config),
+                len(run.results),
+                sum(1 for r in run.results if r.success),
+                run.results[-1].score if run.results else None,
+            ),
+        )
+        self.connection.commit()
+
+    def get_agent_run(self, run_id: str) -> AgentRunRow | None:
+        """Return the agent run with ``run_id`` or None."""
+        cur = self.connection.execute(
+            "SELECT * FROM agent_runs WHERE run_id=?;", (run_id,)
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return AgentRunRow(
+            run_id=row["run_id"],
+            suite_id=row["suite_id"],
+            agent_type=row["agent_type"],
+            status=AgentStatusEnum(row["status"]),
+            created_at=_parse_iso_required(row["created_at"]),
+            completed_at=_parse_iso(row["completed_at"]),
+            config=json.loads(row["config_json"] or "{}"),
+        )
+
+    def list_agent_runs(self, limit: int = 100) -> list[AgentRunRow]:
+        """Return up to ``limit`` agent runs, newest first."""
+        cur = self.connection.execute(
+            """
+            SELECT run_id, suite_id, agent_type, status, created_at,
+                   completed_at, config_json
+            FROM agent_runs
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        out: list[AgentRunRow] = []
+        for row in cur.fetchall():
+            out.append(
+                AgentRunRow(
+                    run_id=row[0],
+                    suite_id=row[1],
+                    agent_type=row[2],
+                    status=AgentStatusEnum(row[3]),
+                    created_at=_parse_iso_required(row[4]),
+                    completed_at=_parse_iso(row[5]),
+                    config=json.loads(row[6] or "{}"),
+                )
+            )
+        return out
+
+    def insert_agent_result(self, run_id: str, result: AgentResultRow) -> None:
+        """Insert a single agent result row."""
+        self.connection.execute(
+            """
+            INSERT INTO agent_results (
+                result_id, run_id, step_id, agent_output, success,
+                score, error, duration_seconds, tokens_used, completed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                str(uuid.uuid4()),
+                run_id,
+                result.step_id,
+                result.agent_output,
+                1 if result.success else 0,
+                result.score,
+                result.error,
+                result.duration_seconds,
+                result.tokens_used,
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+        self.connection.commit()
+
+    def get_agent_results(self, run_id: str) -> list[AgentResultRow]:
+        """Return all results for an agent run."""
+        cur = self.connection.execute(
+            "SELECT * FROM agent_results WHERE run_id=? ORDER BY completed_at;",
+            (run_id,),
+        )
+        out: list[AgentResultRow] = []
+        for row in cur.fetchall():
+            out.append(
+                AgentResultRow(
+                    step_id=row["step_id"],
+                    agent_output=row["agent_output"],
+                    success=bool(row["success"]),
+                    score=row["score"],
+                    error=row["error"],
+                    duration_seconds=row["duration_seconds"],
+                    tokens_used=row["tokens_used"],
+                )
+            )
+        return out
+
+    def insert_agent_task_suite(self, suite: TaskSuiteRow) -> None:
+        """Insert an agent task suite."""
+        now = datetime.now(UTC).isoformat()
+        self.connection.execute(
+            """
+            INSERT INTO agent_task_suites (
+                suite_id, name, description, yaml_content, is_builtin, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?);
+            """,
+            (
+                suite.suite_id,
+                suite.name,
+                suite.description,
+                suite.model_dump_json(),
+                0,
+                now,
+            ),
+        )
+        self.connection.commit()
+
+    def list_agent_task_suites(self) -> list[TaskSuiteRow]:
+        """Return all agent task suites."""
+        cur = self.connection.execute(
+            "SELECT * FROM agent_task_suites ORDER BY created_at;"
+        )
+        out: list[TaskSuiteRow] = []
+        for row in cur.fetchall():
+            data = json.loads(row["yaml_content"])
+            out.append(TaskSuiteRow(
+                suite_id=data["suite_id"],
+                name=data["name"],
+                description=data.get("description", ""),
+                steps=data.get("steps", []),
+            ))
+        return out

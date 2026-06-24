@@ -307,8 +307,8 @@ class TestMigrationV3:
         assert results[0].feedback is None
 
     def test_schema_version_is_3(self, db):
-        """Database migrates to version 3."""
-        assert db.get_schema_version() == 3
+        """Database migrates to at least version 3 (Phase 2A minimum)."""
+        assert db.get_schema_version() >= 3
 
     def test_rollback_v3(self, db):
         """Rollback from v3 to v2 removes feedback column."""
