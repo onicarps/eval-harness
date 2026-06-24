@@ -20,7 +20,7 @@ from rich.table import Table
 
 from src.db import Database
 from src.evaluator import EvaluatorConfig, LLMEvaluator
-from src.ingest import IngestOptions, ingest_file, ingest_stdin
+from src.ingest import IngestOptions, _parse_since, ingest_file, ingest_stdin
 from src.judges import JudgeRegistry
 from src.models import BUILTIN_RUBRIC_V1, EvalRun, RunStatus
 from src.reporter import (
@@ -150,6 +150,17 @@ def run_cmd(
         console.print("[yellow]no records to evaluate[/yellow]")
         logger.warning("No records to evaluate from %s", file)
         raise typer.Exit(code=2)
+
+    if sample is not None and sample <= 0:
+        console.print(f"[red]--sample must be a positive integer, got {sample}[/red]")
+        raise typer.Exit(code=2)
+
+    if since:
+        try:
+            _parse_since(since)
+        except (ValueError, TypeError):
+            console.print(f"[red]invalid --since date: {since}[/red]")
+            raise typer.Exit(code=2)
 
     if dry_run:
         console.print(f"[green]dry-run: {len(records)} record(s) parsed.[/green]")
@@ -296,11 +307,13 @@ def run_cmd(
             payload = summary.model_dump(mode="json")
             text = json.dumps(payload, indent=2, default=str)
             if output_file:
+                Path(output_file).parent.mkdir(parents=True, exist_ok=True)
                 Path(output_file).write_text(text)
             else:
                 console.print(text)
         else:
             if output_file:
+                Path(output_file).parent.mkdir(parents=True, exist_ok=True)
                 Path(output_file).write_text(render_table(summary))
             else:
                 print_table(summary, console=console)
@@ -384,12 +397,14 @@ def report_cmd(
             text = json.dumps(summary.model_dump(mode="json"), indent=2, default=str)
         elif output == "csv":
             tmp = Path(output_file) if output_file else Path(f"{run_id}.csv")
+            tmp.parent.mkdir(parents=True, exist_ok=True)
             export_results(run, results, tmp, fmt="csv")
             typer.echo(f"wrote {tmp}")
             return
         else:
             text = render_table(summary)
         if output_file:
+            Path(output_file).parent.mkdir(parents=True, exist_ok=True)
             Path(output_file).write_text(text)
         else:
             typer.echo(text)
@@ -411,6 +426,7 @@ def export_cmd(
         if run is None:
             typer.echo(f"run not found: {run_id}", err=True)
             raise typer.Exit(code=1)
+        Path(output_file).parent.mkdir(parents=True, exist_ok=True)
         db.export_run(run_id, output_file, fmt=format)
         typer.echo(f"wrote {output_file}")
     finally:
@@ -720,12 +736,14 @@ def calibrate_cmd(
         if json_out:
             text = render_calibration_json(summary)
             if output_file:
+                Path(output_file).parent.mkdir(parents=True, exist_ok=True)
                 Path(output_file).write_text(text)
             else:
                 console.print(text)
         else:
             text = render_calibration_summary(summary)
             if output_file:
+                Path(output_file).parent.mkdir(parents=True, exist_ok=True)
                 Path(output_file).write_text(text)
             else:
                 console.print(text)

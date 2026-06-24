@@ -175,6 +175,7 @@ class Database:
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA journal_mode=WAL;")
         self.connection.execute("PRAGMA foreign_keys=ON;")
+        self.connection.execute("PRAGMA busy_timeout=5000;")
         self._migrate()
 
     def _migrate(self) -> None:

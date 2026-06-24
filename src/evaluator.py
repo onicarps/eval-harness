@@ -37,8 +37,22 @@ from src.models import (
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 PASS_THRESHOLD = 0.7  # Default for EvaluatorConfig; override via --pass-threshold
 
+# HTTP status codes that indicate a permanent (non-retryable) error.
+# These should NOT trigger judge fallback — the request itself is invalid.
+_PERMANENT_STATUS_CODES: frozenset[int] = frozenset({400, 401, 402, 403, 404})
+
 # Setup logging
 logger = logging.getLogger(__name__)
+
+
+def _is_permanent_http_error(status_code: int) -> bool:
+    """Return True when ``status_code`` indicates a non-retryable error.
+
+    Authentication (401), authorization (403), payment (402), and bad-request
+    (400/404) errors will not succeed with a different judge, so fallback is
+    wasteful.  Transient errors (429, 5xx) should trigger fallback.
+    """
+    return status_code in _PERMANENT_STATUS_CODES
 
 
 @dataclass
@@ -356,6 +370,13 @@ class LLMEvaluator:
                     logger.debug("Calling judge %s", judge)
                     data = await self._call_judge(client, judge, prompt)
                     logger.debug("Judge %s returned result", judge)
+                except httpx.HTTPStatusError as exc:
+                    last_error = f"{judge}: HTTP {exc.response.status_code}"
+                    logger.warning("Judge %s failed: HTTP %d", judge, exc.response.status_code)
+                    if _is_permanent_http_error(exc.response.status_code):
+                        logger.info("Permanent error (%d) — skipping fallback judges", exc.response.status_code)
+                        break
+                    continue
                 except Exception as exc:
                     last_error = f"{judge}: {exc}"
                     logger.warning("Judge %s failed: %s", judge, exc)
@@ -444,7 +465,10 @@ class LLMEvaluator:
             error_msg = body["error"].get("message", "Unknown error from OpenRouter")
             logger.error("OpenRouter API application error: %s", error_msg)
             raise RuntimeError(f"OpenRouter API error: {error_msg}")
-        content = body["choices"][0]["message"]["content"]
+        choices = body.get("choices", [])
+        if not choices:
+            raise RuntimeError("OpenRouter API returned no choices")
+        content = choices[0]["message"]["content"]
         logger.debug("OpenRouter API returned content length: %d", len(content))
         return extract_judge_json(content)
 
