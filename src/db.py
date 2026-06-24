@@ -221,7 +221,7 @@ class Database:
 
             # Seed initial data for version 2
             if version == 2:
-                self._seed_rubic_templates(cur)
+                self._seed_rubric_templates(cur)
 
         if current >= CURRENT_SCHEMA_VERSION:
             logger.debug("Database is already at version %d (latest: %d)", current, CURRENT_SCHEMA_VERSION)
