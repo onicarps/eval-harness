@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "llm-eval-harness"
-version = "0.2.0"
+version = "0.2.1"
 description = "CLI tool that evaluates LLM outputs from production logs against a dual-dimension rubric."
 readme = "README.md"
 requires-python = ">=3.11"
