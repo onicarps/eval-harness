@@ -27,6 +27,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced `evaluated_at or 0` sort key with a tz-aware `datetime` sentinel so
   the fallback path can never raise `TypeError` when ordering results.
 
+## [0.2.1] - 2026-06-25
+
+### Added
+- **Phase 2B: Agent Evaluation** — environment-based agent evaluation against task suites.
+- `eval-harness agent eval` command — run agents against task suites with trajectory scoring and LLM-judge evaluation.
+- `eval-harness agent-report` command — view past agent evaluation runs in table, JSON, or CSV format.
+- `eval-harness agent-export` command — export agent evaluation results to file (JSON/CSV).
+- `eval-harness agent-list-suites` command — list all available built-in task suites.
+- `src/agent.py` — Abstract Agent ABC with async `start`/`act`/`stop` lifecycle; `SubprocessAgent` (CLI subprocess via stdin/stdout NDJSON); `PythonAgent` (in-process async function).
+- `src/agent_evaluator.py` — `AgentEvaluator` with trajectory scoring (exact-match + efficiency + LLM-judge), `EvaluatorConfig`.
+- `src/agent_models.py` — Pydantic models: `TaskSuite`, `TaskStep`, `AgentRun`, `AgentResult`, `ScoringSummary`, and supporting enums.
+- `src/task_suite.py` — 5 built-in task suites (echo-v1, math-v1, file-read-v1, string-reversal-v1, multi-step-v1) plus `llm-judge-v1` suite.
+- LLM-judge scoring integration — `score_step()` method in `LLMEvaluator` reuses existing judge infrastructure for open-ended task scoring.
+- Database migration v4 — new `agent_runs`, `agent_results`, `agent_task_suites` tables; schema version bumped to 4.
+- 102 new tests across 5 test files covering agent lifecycle, evaluator, models, task suites, and CLI commands.
+- GitHub OIDC publish workflow (`.github/workflows/publish.yml`) for automated PyPI releases.
+
+### Changed
+- `CURRENT_SCHEMA_VERSION` bumped to 4.
+
 ## [0.2.0] - 2026-06-23
 
 ### Added

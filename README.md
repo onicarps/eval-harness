@@ -5,9 +5,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
-**Evaluate LLM outputs from production logs against a dual-dimension rubric (faithfulness + task completion).**
+**Evaluate LLM outputs from production logs AND agent behavior in environments against a dual-dimension rubric (faithfulness + task completion).**
 
-eval-harness ingests JSONL/CSV logs, scores each record using LLM-as-judge via OpenRouter, and produces a rich terminal report — or exports JSON/CSV for CI pipelines. Built for teams who need fast, repeatable quality checks on production LLM traffic.
+eval-harness ingests JSONL/CSV logs, scores each record using LLM-as-judge via OpenRouter, and produces a rich terminal report — or exports JSON/CSV for CI pipelines. The `agent` command runs agents in sandboxed environments against task suites with trajectory scoring. Built for teams who need fast, repeatable quality checks on production LLM traffic and agent behavior.
 
 ## Features
 
@@ -19,6 +19,8 @@ eval-harness ingests JSONL/CSV logs, scores each record using LLM-as-judge via O
 - **Response caching** — judge responses cached in SQLite; skip re-evaluation of unchanged records
 - **Calibration mode** — measure inter-judge agreement across all available models
 - **Degraded mode** — local heuristic fallback when the judge API is unreachable
+- **Agent evaluation** — `agent` command runs agents in environment adapters (subprocess, Python REPL) against task suites with trajectory scoring
+- **Task suites** — built-in suites (echo, math, file-read, string-reversal, multi-step) plus LLM-judge scoring for open-ended tasks
 
 ## Install
 
@@ -44,6 +46,15 @@ eval-harness report --run-id <RUN_ID>
 
 # 4. Export results
 eval-harness export --run-id <RUN_ID> --format json --output-file results.json
+
+# 5. Run an agent evaluation
+eval-harness agent --suite echo-v1 --agent-subprocess "python my_agent.py"
+
+# 6. List available task suites
+eval-harness agent-list-suites
+
+# 7. View a previous agent run
+eval-harness agent-report --run-id <AGENT_RUN_ID>
 ```
 
 ### Input Format
@@ -312,6 +323,95 @@ eval-harness gate --suggest-baseline
 
 # Use in CI
 eval-harness gate --run-id abc123 --json --output-file gate-result.json
+```
+
+### `agent` — Evaluate agent behavior in environments
+
+```bash
+eval-harness agent --suite <suite> [--agent-subprocess <cmd> | --agent-python <path>] [--max-steps N] [--timeout N] [--pass-threshold 0.7] [--output table|json] [--output-file <path>] [--db <path>]
+```
+
+Runs an agent against a task suite, recording trajectories and scoring each step. Provides either `--agent-subprocess` (CLI subprocess via NDJSON over stdin/stdout) or `--agent-python` (in-process async function).
+
+| Option | Default | Description |
+|---|---|---|
+| `--suite` | `echo-v1` | Task suite ID to run (use `agent-list-suites` to see available) |
+| `--agent-subprocess` | — | Command to launch a subprocess agent (NDJSON over stdin/stdout) |
+| `--agent-python` | — | Python agent module path (e.g. `mymodule:my_agent_func`) |
+| `--max-steps` | `10` | Maximum number of steps per task before marking as failed |
+| `--timeout` | `60` | Per-step timeout in seconds |
+| `--pass-threshold` | `0.7` | Score threshold (0.0–1.0) for pass/fail |
+| `--output` | `table` | Output format: `table` or `json` |
+| `--output-file` | — | Write results to a file |
+| `--db` | `~/.eval-harness/eval.db` | Path to SQLite database |
+
+```bash
+# Run the echo-v1 suite with a subprocess agent
+eval-harness agent --suite echo-v1 --agent-subprocess "python my_agent.py"
+
+# Use a Python agent with custom timeout
+eval-harness agent --suite math-v1 --agent-python "my_agent:solve" --max-steps 20
+
+# Export JSON results to a file
+eval-harness agent --suite echo-v1 --agent-subprocess "python agent.py" --output json --output-file agent-results.json
+```
+
+### `agent-list-suites` — List available task suites
+
+```bash
+eval-harness agent-list-suites [--json]
+```
+
+Lists all built-in task suites available for agent evaluation.
+
+| Option | Default | Description |
+|---|---|---|
+| `--json` | `false` | Output as JSON |
+
+```bash
+eval-harness agent-list-suites              # list suites in a table
+eval-harness agent-list-suites --json       # list as JSON
+```
+
+### `agent-report` — Show results for a previous agent run
+
+```bash
+eval-harness agent-report --run-id <ID> [--output table|json|csv] [--output-file <path>] [--db <path>]
+```
+
+Displays detailed trajectory results from a stored agent evaluation run, including per-step scores, success/failure, and timing.
+
+| Option | Default | Description |
+|---|---|---|
+| `--run-id` | *required* | Agent run ID to display |
+| `--output` | `table` | Output format: `table`, `json`, or `csv` |
+| `--output-file` | — | Write report to a file |
+| `--db` | `~/.eval-harness/eval.db` | Path to SQLite database |
+
+```bash
+eval-harness agent-report --run-id abc123                   # table output
+eval-harness agent-report --run-id abc123 --output json     # JSON output
+eval-harness agent-report --run-id abc123 --output csv --output-file report.csv
+```
+
+### `agent-export` — Export agent run results
+
+```bash
+eval-harness agent-export --run-id <ID> --format json|csv --output-file <path> [--db <path>]
+```
+
+Exports full trajectory data from a completed agent run. JSON export includes per-step detail; CSV export is a flat table.
+
+| Option | Default | Description |
+|---|---|---|
+| `--run-id` | *required* | Agent run ID to export |
+| `--format` | `json` | Export format: `json` or `csv` |
+| `--output-file` | *required* | Output file path |
+| `--db` | `~/.eval-harness/eval.db` | Path to SQLite database |
+
+```bash
+eval-harness agent-export --run-id abc123 --format json --output-file results.json
+eval-harness agent-export --run-id abc123 --format csv --output-file results.csv
 ```
 
 ## Exit Codes
